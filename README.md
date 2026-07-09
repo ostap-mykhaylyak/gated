@@ -1,0 +1,104 @@
+# gated
+
+Reverse proxy and load balancer written in Go. Single static binary,
+no runtime dependencies, managed by systemd. Designed to be the entry
+point of the server, in front of any service.
+
+> **Status: pre-release.** Feature-complete for v1; hardening and
+> field testing in progress.
+
+## Features
+
+- Reverse proxy + load balancing (round_robin, least_conn, ip_hash,
+  uri_hash, random; per-backend `backup`; sticky sessions; passive +
+  active health checks). Backend health state survives config reloads.
+- TLS/HTTPS, HTTP/2, HTTP/3 (QUIC, advertised via Alt-Svc), Early
+  Hints (103)
+- Compression: zstd, brotli, gzip (negotiated, per-vhost overridable)
+- Real IP resolution with trusted proxies (`X-Forwarded-For` walked
+  right-to-left)
+- Certificates reused from the conventional Let's Encrypt layout
+  (`/etc/letsencrypt/live/<host>/`), hot-swapped on renewal; ACME
+  HTTP-01 challenges passed through to the local nginx
+- One YAML file per virtual host (`/etc/gated/vhosts/*.yaml`),
+  hot-reloaded with a last-good rule (a broken file never takes a
+  vhost down); unknown `Host` gets a plain 404
+- Optional management REST API (vhosts as REST resources, versioned
+  writes with rollback)
+
+## Management API (optional)
+
+Disabled by default. Enable with `api.enabled: true` + `api.token` in
+the config (and add `/etc/gated/vhosts` to `ReadWritePaths=` in the
+unit). Bearer-token auth on everything except `GET /healthz`.
+
+| Endpoint | Effect |
+|---|---|
+| `GET /healthz` | 200 if OK/WARN, 503 if CRITICAL (no token, for probes) |
+| `GET /status` | full status snapshot (same document as `--status-json`) |
+| `GET /metrics` | live metrics snapshot |
+| `GET /config` | current global config, secrets redacted |
+| `POST /reload` | reload global config + vhosts (same path as SIGHUP) |
+| `GET /vhosts` | vhosts being served, with per-backend runtime state |
+| `GET /vhosts/{name}` | the raw YAML file |
+| `PUT /vhosts/{name}` | validate → snapshot → atomic write → reload |
+| `DELETE /vhosts/{name}` | archive and remove |
+| `GET /vhosts/{name}/history` | archived versions (metadata only) |
+| `POST /vhosts/{name}/rollback` | restore latest or `{"version":"..."}` |
+
+Every write archives the previous version under `vhosts/.history/`
+(20 kept, FIFO). The global `config.yaml` is never writable via API.
+
+## Build
+
+```sh
+make            # static Linux binary in bin/gated
+make test       # go test ./... -race
+```
+
+The version is injected at build time from `git describe`.
+
+## Install
+
+Either turnkey from the binary itself (as root):
+
+```sh
+./gated --init
+systemctl daemon-reload
+systemctl enable --now gated
+gated --status
+```
+
+or from the repo with `make install`.
+
+## CLI
+
+| Flag | Mode | Effect |
+|---|---|---|
+| *(none)* | daemon | start the service (what systemd runs) |
+| `--init` | lifecycle | provision layout, install binary/unit/logrotate, exit |
+| `--purge` | lifecycle | remove ALL config, data and logs (asks confirmation; `--yes` to skip) |
+| `--status` | client | query the running daemon via its Unix socket |
+| `--status-json` | client | machine-readable status (stable field names) |
+| `--watch 2s` | client | live status view, like `top` |
+| `--version` | misc | print version, exit |
+
+`--status` exit codes follow the Nagios convention: 0 OK, 1 WARNING,
+2 CRITICAL, 3 UNKNOWN.
+
+## Layout
+
+```
+/sbin/gated                 binary
+/etc/gated/config.yaml      global config (never rewritten)
+/etc/gated/vhosts/*.yaml    one file per virtual host
+/var/log/gated/             JSON logs (rotation via logrotate + SIGHUP)
+/run/gated/gated.sock       local status socket
+```
+
+Observability is reading the log files: `gated.log` (service),
+`access.log`, `backend.log`, `api.log` — all JSON, one line per event.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

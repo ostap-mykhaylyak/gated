@@ -1,0 +1,63 @@
+# gated - global configuration.
+#
+# This file is never rewritten by the program: /etc/gated may be
+# mounted read-only. Virtual hosts live in /etc/gated/vhosts/, one
+# YAML file per vhost (those ARE rewritten by the management API, if
+# you enable it).
+#
+# Every field is optional: omitted fields keep their production
+# default (the values shown here). Reloaded automatically on change.
+
+entrypoints:
+  http:
+    listen: "0.0.0.0:80"        # e.g. "0.0.0.0:80"
+  https:
+    listen: "0.0.0.0:443"       # TCP (HTTP/1.1 + HTTP/2)
+    http3: true                 # QUIC on the same UDP port + Alt-Svc header
+
+tls:
+  # Conventional certbot directory: certificates are looked up as
+  # <letsencrypt_dir>/<host>/fullchain.pem + privkey.pem and hot-swapped
+  # on renewal. Per-vhost overrides live in the vhost file.
+  letsencrypt_dir: "/etc/letsencrypt/live"
+  min_version: "1.2"            # "1.2" or "1.3"
+
+acme:
+  # nginx (bound to 127.0.0.1) owns certificate issuance/renewal.
+  # gated forwards /.well-known/acme-challenge/ to it so HTTP-01
+  # renewals keep working, even for hosts not configured in gated yet.
+  passthrough: true
+  upstream: "http://127.0.0.1:80"
+
+proxy:
+  # CIDRs (or single IPs) whose real_ip_header is trusted for client
+  # IP resolution. Invalid entries are skipped with a warning.
+  trusted_proxies: []           # e.g. ["10.0.0.0/8", "173.245.48.0/20"]
+  real_ip_header: "X-Forwarded-For"
+  read_header_timeout: "10s"
+  backend_timeout: "60s"
+
+compression:
+  # Global default, overridable per-vhost. Algorithms in preference
+  # order for Accept-Encoding negotiation.
+  enabled: true
+  algorithms: [zstd, br, gzip]
+  min_size: 1024                # bytes below which responses are not compressed
+
+health:
+  # Global default for passive backend health checking, overridable
+  # per-vhost: a backend is marked down after max_fails consecutive
+  # errors and retried after cooldown.
+  max_fails: 3
+  cooldown: "30s"
+
+api:
+  # Optional management REST API. Disabled by default; enabling it
+  # REQUIRES a token and makes /etc/gated/vhosts writable (see the
+  # ReadWritePaths note in the systemd unit).
+  enabled: false
+  listen: "127.0.0.1:9090"      # loopback or management network, NEVER the public entrypoint
+  token: ""                     # bearer token; empty + enabled = fatal error
+  tls:                          # required if listen is not loopback
+    cert_file: ""
+    key_file: ""

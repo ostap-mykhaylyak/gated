@@ -1,0 +1,5 @@
+/bin/
+*.log
+*.db
+/vendor/
+.DS_Store

@@ -1,0 +1,48 @@
+# gated - example virtual host.
+#
+# One file = one virtual host. Copy to <name>.yaml to activate (the
+# .example suffix is ignored). Files are reloaded on change; an invalid
+# file is skipped and logged, the other vhosts keep serving. Manageable
+# by hand or via the REST API (PUT /vhosts/example.com).
+#
+# NOTE: schema shipped ahead of implementation - the proxy engine is
+# under development.
+
+hosts: ["example.com", "www.example.com"]
+
+tls:
+  cert_name: ""            # default: letsencrypt_dir/<first host>; set to force another name
+  cert_file: ""            # full override outside letsencrypt (optional)
+  key_file: ""
+
+redirect_to_https: true
+
+early_hints: []            # 103 hints sent before the backend responds
+  # - "</assets/app.css>; rel=preload; as=style"
+
+backends:
+  - url: "http://127.0.0.1:8080"
+    weight: 2
+  - url: "http://127.0.0.1:8081"
+    weight: 1
+  - url: "http://127.0.0.1:8082"
+    backup: true           # only used when all primary backends are down
+
+load_balancing:
+  strategy: "round_robin"  # round_robin | least_conn | ip_hash | uri_hash | random
+  sticky:
+    enabled: false
+    cookie: "gated_affinity"
+    ttl: "1h"
+  health:                  # omitted = inherit the global defaults
+    passive:
+      max_fails: 3
+      cooldown: "30s"
+    active:
+      enabled: false
+      path: "/healthz"
+      interval: "10s"
+      timeout: "2s"
+      expect_status: 200
+
+compression: {}            # omitted/empty = inherit the global defaults

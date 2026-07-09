@@ -38,7 +38,7 @@ jobs:
           cp gated internal/bootstrap/gated.service README.md LICENSE "$BUNDLE"/
           tar -czf "$BUNDLE.tar.gz" "$BUNDLE"
           sha256sum "$BUNDLE.tar.gz" > "$BUNDLE.tar.gz.sha256"
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: |
             gated-*.tar.gz

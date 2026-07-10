@@ -215,9 +215,14 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 			}
 		}
 
+		// Protocol upgrades (WebSocket and any other Connection: Upgrade)
+		// are streamed bidirectionally by ReverseProxy after hijacking
+		// the connection: skip Early Hints and compression for them.
+		upgrade := isUpgradeRequest(r)
+
 		// 103 Early Hints, sent before contacting the backend. The
 		// Link headers intentionally remain on the final response too.
-		if len(v.EarlyHints) > 0 {
+		if len(v.EarlyHints) > 0 && !upgrade {
 			for _, hint := range v.EarlyHints {
 				sw.Header().Add("Link", hint)
 			}
@@ -230,7 +235,13 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 		issueVisit := v.WAFPol.Enabled && p.session != nil && p.waf.NeedsSession() &&
 			r.Method == http.MethodGet && !p.session.Valid(r)
 
-		cw, finish := compress.Wrap(sw, r, v.Comp)
+		// The client-facing writer: raw for upgrades (so the hijack can
+		// take over the connection), compressed otherwise.
+		cw := http.ResponseWriter(sw)
+		finish := func() {}
+		if !upgrade {
+			cw, finish = compress.Wrap(sw, r, v.Comp)
+		}
 		defer finish()
 
 		// Balancer + retries: a transport-level failure on a
@@ -460,6 +471,10 @@ func (sw *statusWriter) Flush() {
 	http.NewResponseController(sw.ResponseWriter).Flush()
 }
 
+// Unwrap lets http.ResponseController reach the underlying writer's
+// Hijack (needed for WebSocket / protocol upgrades) and Flush.
+func (sw *statusWriter) Unwrap() http.ResponseWriter { return sw.ResponseWriter }
+
 // trackWriter records whether the response has started (headers or
 // body sent), which forbids retrying on another backend.
 type trackWriter struct {
@@ -483,6 +498,9 @@ func (tw *trackWriter) Flush() {
 	http.NewResponseController(tw.ResponseWriter).Flush()
 }
 
+// Unwrap exposes the underlying writer for Hijack/Flush during upgrades.
+func (tw *trackWriter) Unwrap() http.ResponseWriter { return tw.ResponseWriter }
+
 // bufferBody reads the request body (up to limit) into memory for WAF
 // inspection and replaces r.Body with a replayable reader, so the
 // proxy still forwards it intact. Bodies larger than the limit, or of
@@ -500,6 +518,20 @@ func bufferBody(r *http.Request, limit int64) string {
 	}
 	r.Body = io.NopCloser(bytes.NewReader(buf))
 	return string(buf)
+}
+
+// isUpgradeRequest reports whether the request asks to switch protocol
+// (WebSocket, or any other Connection: Upgrade token).
+func isUpgradeRequest(r *http.Request) bool {
+	if r.Header.Get("Upgrade") == "" {
+		return false
+	}
+	for _, v := range r.Header["Connection"] {
+		if strings.Contains(strings.ToLower(v), "upgrade") {
+			return true
+		}
+	}
+	return false
 }
 
 // normalizeHost lowercases and strips port and trailing dot.

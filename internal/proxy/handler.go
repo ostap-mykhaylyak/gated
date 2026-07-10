@@ -266,7 +266,7 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 				}
 			}
 
-			err, wrote := p.forward(cw, r, b, clientIP, secure, issueVisit, v.Transport)
+			err, wrote := p.forward(cw, r, b, clientIP, secure, issueVisit, v.Transport, v.Hosts)
 			v.Pool.Report(b, err == nil)
 			if err == nil {
 				return
@@ -318,6 +318,36 @@ func (p *Proxy) solveChallenge(w http.ResponseWriter, r *http.Request, clientIP 
 	io.WriteString(w, `{"ok":true}`)
 }
 
+// upgradeLocation rewrites a redirect's Location from http:// to
+// https:// when it points at one of the vhost's own hosts. This breaks
+// the classic reverse-proxy loop where a TLS-terminated CMS redirects
+// its own host back to plaintext. Redirects to other hosts, or already
+// https, are left untouched.
+func upgradeLocation(resp *http.Response, hosts []string) {
+	loc := resp.Header.Get("Location")
+	if loc == "" {
+		return
+	}
+	u, err := url.Parse(loc)
+	if err != nil || u.Scheme != "http" {
+		return
+	}
+	if !hostInList(normalizeHost(u.Host), hosts) {
+		return
+	}
+	u.Scheme = "https"
+	resp.Header.Set("Location", u.String())
+}
+
+func hostInList(host string, hosts []string) bool {
+	for _, h := range hosts {
+		if h == host {
+			return true
+		}
+	}
+	return false
+}
+
 // newRequestID returns a short random hex id used as the response
 // "Ray ID" and access-log correlation key.
 func newRequestID() string {
@@ -329,15 +359,15 @@ func newRequestID() string {
 // forward proxies the request to one backend. Returns the transport
 // error (nil on success) and whether anything was written to the
 // client (which forbids retrying).
-func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, b *balancer.Backend, clientIP string, secure, issueVisit bool, transport http.RoundTripper) (error, bool) {
+func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, b *balancer.Backend, clientIP string, secure, issueVisit bool, transport http.RoundTripper, hosts []string) (error, bool) {
 	b.Acquire()
 	defer b.Release()
 
 	tw := &trackWriter{ResponseWriter: w}
 	var errOut error
-	scheme := "http"
+	scheme, sslOn, fwdPort := "http", "off", "80"
 	if secure {
-		scheme = "https"
+		scheme, sslOn, fwdPort = "https", "on", "443"
 	}
 	rp := &httputil.ReverseProxy{
 		Transport: transport,
@@ -348,6 +378,14 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, b *balancer.Back
 				strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html") {
 				resp.Header.Add("Set-Cookie", p.session.Cookie(secure).String())
 			}
+			// Anti-loop: when we terminate TLS but a CMS emits an
+			// absolute http:// redirect to its own host (because it
+			// still thinks the request was plaintext), upgrade the
+			// Location to https:// so the client does not bounce back
+			// into an endless redirect.
+			if secure && resp.StatusCode >= 300 && resp.StatusCode < 400 {
+				upgradeLocation(resp, hosts)
+			}
 			return nil
 		},
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -357,6 +395,10 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, b *balancer.Back
 			pr.Out.Header.Set("X-Real-IP", clientIP)
 			pr.Out.Header.Set("X-Forwarded-Proto", scheme)
 			pr.Out.Header.Set("X-Forwarded-Host", r.Host)
+			// Extra hints so CMSes that ignore X-Forwarded-Proto still
+			// detect HTTPS and avoid the "force SSL" redirect loop.
+			pr.Out.Header.Set("X-Forwarded-Ssl", sslOn)
+			pr.Out.Header.Set("X-Forwarded-Port", fwdPort)
 		},
 		ErrorHandler: func(_ http.ResponseWriter, _ *http.Request, err error) {
 			// Record only: the caller decides (retry / 502). Nothing

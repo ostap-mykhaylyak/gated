@@ -15,6 +15,10 @@ point of the server, in front of any service.
   Backends (in each vhost file) take a full `url` — any IP/host, any
   port, `http://` or `https://`; per-vhost `backend_tls` sets the SNI /
   cert name and can accept self-signed backend certs.
+- **No redirect loops** for TLS-terminated CMSes: gated forwards
+  `X-Forwarded-Proto/Ssl/Port` and upgrades a backend's `http://`
+  self-redirects to `https://`, so a WordPress/CMS set to HTTPS behind
+  an HTTP backend connection does not bounce forever.
 - TLS/HTTPS, HTTP/2, HTTP/3 (QUIC, advertised via Alt-Svc), Early
   Hints (103)
 - Compression: zstd, brotli, gzip (negotiated, per-vhost overridable)

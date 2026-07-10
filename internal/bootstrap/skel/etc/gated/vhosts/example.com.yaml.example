@@ -17,6 +17,15 @@ tls:
 
 redirect_to_https: true
 
+# CMS behind gated (WordPress, etc.): gated terminates TLS and tells the
+# backend the request was HTTPS via X-Forwarded-Proto/Ssl/Port, and
+# rewrites http:// self-redirects to https:// — this prevents the
+# classic "redirect loop" when the CMS is configured for HTTPS but gated
+# reaches it over HTTP. If the CMS still loops, either add to
+# wp-config.php:
+#   if (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https') $_SERVER['HTTPS']='on';
+# or point the backend url at the CMS's own https:// port (see below).
+
 early_hints: []            # 103 hints sent before the backend responds
   # - "</assets/app.css>; rel=preload; as=style"
 

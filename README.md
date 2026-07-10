@@ -38,9 +38,12 @@ point of the server, in front of any service.
 - **WAF** with YAML rules (`/etc/gated/waf/*.yaml`), hot-reloaded:
   request inspection (method/path/query/headers/cookies/args/body/IP),
   ModSecurity-style operators and transforms, allow/block/log actions,
-  and fail2ban-style stateful IP bans (`block` vs `detect` mode, global
-  and per-vhost). Convert Coraza/ModSecurity, Nuclei and fail2ban rules
-  with [docs/waf-conversion-prompt.md](docs/waf-conversion-prompt.md).
+  fail2ban-style stateful IP bans, and per-IP **token-bucket rate
+  limiting** (`rate_limit` → 429 + Retry-After) — all inspecting the
+  request payload (`field: body`) too. Ships hardening rule sets for
+  WordPress and WooCommerce (disabled by default). Convert
+  Coraza/ModSecurity, Nuclei and fail2ban rules with
+  [docs/waf-conversion-prompt.md](docs/waf-conversion-prompt.md).
 - **GeoIP** (MaxMind `.mmdb` from the conventional `/usr/share/GeoIP/`,
   hot-swapped on refresh): the WAF `country`/`continent`/`asn` fields
   let you block or ban by geography, e.g. deny traffic from a country.

@@ -1,0 +1,66 @@
+# gated WAF - WooCommerce hardening (starter set).
+#
+# Disabled by default. Protects the cart/checkout/API surface, which is
+# a common target for database-flooding and card-testing bots. Combine
+# with waf/50-session.yaml (prior-visit gate) for add-to-cart.
+
+group: woocommerce
+description: WooCommerce cart/checkout/API protections (edit before enabling).
+enabled: false
+
+rules:
+  # Store API / AJAX: pace anonymous bursts (bots probing cart/checkout).
+  - id: "wc-store-api-ratelimit"
+    msg: "WooCommerce store API rate limit"
+    severity: medium
+    match:
+      - field: path
+        operator: rx
+        transform: [lowercase]
+        patterns: ['^/wp-json/wc/store/', '^/\?wc-ajax=']
+    rate_limit:
+      requests: 30
+      per: 1m
+      burst: 10
+
+  # add-to-cart hammering without a prior visit is a DB-flood pattern:
+  # require the visit session marker (see 50-session.yaml). Here as a
+  # rate limit fallback in case the session gate is not enabled.
+  - id: "wc-add-to-cart-ratelimit"
+    msg: "add-to-cart rate limit"
+    match:
+      - field: query
+        operator: contains
+        patterns: ["add-to-cart="]
+    rate_limit:
+      requests: 15
+      per: 1m
+
+  # Checkout: card-testing bots submit the checkout endpoint rapidly.
+  - id: "wc-checkout-ratelimit"
+    msg: "checkout rate limit"
+    severity: high
+    match:
+      - field: path
+        operator: rx
+        transform: [lowercase]
+        patterns: ['/checkout/', '/\?wc-ajax=checkout']
+      - field: method
+        operator: eq
+        patterns: ["POST"]
+    rate_limit:
+      requests: 5
+      per: 1m
+
+  # Coupon brute forcing via the apply-coupon AJAX action.
+  - id: "wc-coupon-bruteforce"
+    msg: "coupon brute force"
+    action: ban
+    match:
+      - field: query
+        operator: contains
+        patterns: ["wc-ajax=apply_coupon"]
+    track:
+      threshold: 20
+      window: 5m
+      ban_time: 1h

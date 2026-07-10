@@ -47,6 +47,10 @@ rules:
       window: 10m                # finestra di conteggio (per-IP)
       ban_time: 1h               # durata del ban
       on_status: [401, 403]      # se presente: conta al RESPONSE time, solo su questi status
+    rate_limit:                  # opzionale: token bucket per-IP (429, non ban)
+      requests: 10               # richieste consentite per finestra
+      per: 1m                    # finestra
+      burst: 5                   # capienza del bucket (default = requests)
 ```
 
 ### Campi (`field`) — corrispondenza con le variabili ModSecurity
@@ -281,6 +285,12 @@ fail2ban conta *fallimenti* nei log e banna l'IP. In `gated` il
 - `action: block`? No: usa **sempre** `action: ban` per le regole
   fail2ban (il blocco immediato avviene automaticamente quando l'IP è
   bannato).
+
+> **Ban vs rate limit**: `track`+`ban` chiude fuori l'IP per `ban_time`
+> (adatto a brute force / scanner). `rate_limit` invece *pacizza* il
+> client (429 + Retry-After sull'eccesso) senza bloccarlo — adatto a
+> endpoint legittimi ma costosi (login, REST, checkout). Un jail
+> fail2ban → `ban`; un semplice "max N req/min" → `rate_limit`.
 
 **Esempio.** Filtro WordPress + jail `maxretry=5, findtime=600,
 bantime=3600`:

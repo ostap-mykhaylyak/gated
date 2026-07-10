@@ -9,11 +9,12 @@ import (
 // fixed-window counters and per-IP bans. In-memory only: bans do not
 // survive a restart (acceptable for a short-lived edge ban).
 type stateStore struct {
-	mu   sync.Mutex
-	hits map[string]*counter // key: ruleID + "\x00" + ip
-	bans map[string]int64    // key: ip -> ban-until (unix nanos)
-	stop chan struct{}
-	once sync.Once
+	mu       sync.Mutex
+	hits     map[string]*counter // key: ruleID + "\x00" + ip
+	bans     map[string]int64    // key: ip -> ban-until (unix nanos)
+	limiters map[string]*bucket  // key: ruleID + "\x00" + ip
+	stop     chan struct{}
+	once     sync.Once
 }
 
 type counter struct {
@@ -21,14 +22,52 @@ type counter struct {
 	windowStart int64 // unix nanos
 }
 
+// bucket is a token bucket for rate limiting.
+type bucket struct {
+	tokens float64
+	last   int64 // unix nanos of the last refill
+}
+
 func newStateStore() *stateStore {
 	s := &stateStore{
-		hits: map[string]*counter{},
-		bans: map[string]int64{},
-		stop: make(chan struct{}),
+		hits:     map[string]*counter{},
+		bans:     map[string]int64{},
+		limiters: map[string]*bucket{},
+		stop:     make(chan struct{}),
 	}
 	go s.gc()
 	return s
+}
+
+// allow applies the token bucket for (ruleID, ip). It returns whether
+// the request is within the limit and, when not, how long until the
+// next token frees up.
+func (s *stateStore) allow(ruleID, ip string, rl *RateLimit) (bool, time.Duration) {
+	now := time.Now().UnixNano()
+	key := ruleID + "\x00" + ip
+	rate := float64(rl.Requests) / float64(rl.Per.Std()) // tokens per nanosecond
+	capacity := float64(rl.Burst)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	b := s.limiters[key]
+	if b == nil {
+		b = &bucket{tokens: capacity, last: now}
+		s.limiters[key] = b
+	}
+	b.tokens += float64(now-b.last) * rate
+	if b.tokens > capacity {
+		b.tokens = capacity
+	}
+	b.last = now
+	if b.tokens >= 1 {
+		b.tokens--
+		return true, 0
+	}
+	// Time until one token accrues.
+	wait := time.Duration((1 - b.tokens) / rate)
+	return false, wait
 }
 
 // banned reports whether ip is currently banned.
@@ -109,6 +148,12 @@ func (s *stateStore) gc() {
 			for k, c := range s.hits {
 				if now-c.windowStart > int64(time.Hour) {
 					delete(s.hits, k)
+				}
+			}
+			// Buckets idle for over an hour are surely refilled to full.
+			for k, b := range s.limiters {
+				if now-b.last > int64(time.Hour) {
+					delete(s.limiters, k)
 				}
 			}
 			s.mu.Unlock()

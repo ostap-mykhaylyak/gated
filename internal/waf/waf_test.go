@@ -452,6 +452,91 @@ rules:
 	}
 }
 
+func TestRateLimit(t *testing.T) {
+	e := newEngine(t, map[string]string{"rl.yaml": `
+rules:
+  - id: "rl-login"
+    msg: "login rate limit"
+    match:
+      - field: path
+        operator: eq
+        patterns: ["/wp-login.php"]
+    rate_limit:
+      requests: 3
+      per: 1m
+      burst: 3
+`})
+	ip := "1.2.3.4"
+	// Burst of 3 is allowed, the 4th is limited (429).
+	for i := 0; i < 3; i++ {
+		if dec, _ := e.Evaluate(NewContext(req("POST", "/wp-login.php"), ip, ""), block); dec.Block {
+			t.Fatalf("request %d within burst must pass", i)
+		}
+	}
+	dec, _ := e.Evaluate(NewContext(req("POST", "/wp-login.php"), ip, ""), block)
+	if !dec.Block || dec.Status != 429 {
+		t.Fatalf("4th request must be 429, got %+v", dec)
+	}
+	if dec.RetryAfter <= 0 {
+		t.Fatal("429 must carry a Retry-After hint")
+	}
+	// A different IP has its own bucket.
+	if dec, _ := e.Evaluate(NewContext(req("POST", "/wp-login.php"), "5.6.7.8", ""), block); dec.Block {
+		t.Fatal("a separate IP must not be rate limited")
+	}
+	// Requests to other paths are unaffected.
+	if dec, _ := e.Evaluate(NewContext(req("GET", "/"), ip, ""), block); dec.Block {
+		t.Fatal("non-matching path must not be limited")
+	}
+}
+
+func TestBodyPayloadInspection(t *testing.T) {
+	// The WAF inspects the request payload (field: body) - here the
+	// XML-RPC pingback marker that only lives inside the POST body.
+	e := newEngine(t, map[string]string{"x.yaml": `
+rules:
+  - id: "xmlrpc-pingback"
+    action: block
+    match:
+      - field: path
+        operator: eq
+        patterns: ["/xmlrpc.php"]
+      - field: body
+        operator: contains
+        transform: [lowercase]
+        patterns: ["pingback.ping"]
+`})
+	if !e.NeedsBody() {
+		t.Fatal("engine must report it needs the body")
+	}
+	body := `<?xml version="1.0"?><methodCall><methodName>pingback.ping</methodName></methodCall>`
+	dec, _ := e.Evaluate(NewContext(req("POST", "/xmlrpc.php"), "1.1.1.1", body), block)
+	if !dec.Block {
+		t.Fatal("pingback payload must be blocked")
+	}
+	// Same path, harmless body: allowed.
+	dec, _ = e.Evaluate(NewContext(req("POST", "/xmlrpc.php"), "1.1.1.1", "<methodCall><methodName>demo.sayHello</methodName></methodCall>"), block)
+	if dec.Block {
+		t.Fatal("non-pingback xmlrpc body must pass")
+	}
+}
+
+func TestShippedWPWooRulesCompile(t *testing.T) {
+	// The shipped WP/Woo rule files are disabled by default; verify
+	// their rules still compile by loading them enabled.
+	for _, name := range []string{"60-wordpress.yaml", "61-woocommerce.yaml"} {
+		data, err := os.ReadFile(filepath.Join("..", "bootstrap", "skel", "etc", "gated", "waf", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		enabled := strings.Replace(string(data), "enabled: false", "enabled: true", 1)
+		e := newEngine(t, map[string]string{name: enabled})
+		if e.Count() == 0 {
+			t.Fatalf("%s: no rules compiled (schema drift?)", name)
+		}
+	}
+}
+
 func TestShippedExampleRulesLoad(t *testing.T) {
 	// The rules shipped in skel must always compile against the engine.
 	src := filepath.Join("..", "bootstrap", "skel", "etc", "gated", "waf")

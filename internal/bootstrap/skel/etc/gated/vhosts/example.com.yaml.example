@@ -69,6 +69,26 @@ load_balancing:
 
 compression: {}            # omitted/empty = inherit the global defaults
 
+headers:                   # per-vhost header mutations (optional)
+  response:                # applied to every response (proxied + gated pages)
+    set:
+      Strict-Transport-Security: "max-age=31536000; includeSubDomains"
+      X-Content-Type-Options: "nosniff"
+      X-Frame-Options: "SAMEORIGIN"
+      Referrer-Policy: "strict-origin-when-cross-origin"
+    remove:                # hide backend fingerprinting headers
+      - "Server"
+      - "X-Powered-By"
+  request: {}              # headers toward the backend (set/add/remove)
+
+cors:                      # cross-origin resource sharing (optional)
+  enabled: false
+  allow_origins: ["https://app.example.com"]   # exact origins, or ["*"]
+  allow_methods: ["GET", "POST", "OPTIONS"]
+  allow_headers: ["Content-Type", "Authorization"]
+  allow_credentials: false
+  max_age: 24h
+
 waf:                       # omitted = inherit the global WAF settings
   # enabled: true          # force on/off for this vhost
   # mode: detect           # block | detect (override global)

@@ -157,6 +157,18 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 			return
 		}
 
+		// Response-header mutations apply to every response of this
+		// vhost (proxied pages included), enforced in sw.WriteHeader.
+		if hasHeaderOps(v.Headers.Response) {
+			sw.respOps, sw.hasOps = v.Headers.Response, true
+		}
+
+		// CORS: set the headers for an allowed Origin and short-circuit
+		// preflight OPTIONS before the WAF/backend.
+		if applyCORS(sw, r, v.CORS) {
+			return
+		}
+
 		// WAF: inspect the request before anything is proxied. Runs on
 		// both listeners so blocks and bans apply to :80 too.
 		if v.WAFPol.Enabled {
@@ -244,6 +256,11 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 		// when a loaded rule actually uses the session field.
 		issueVisit := v.WAFPol.Enabled && p.session != nil && p.waf.NeedsSession() &&
 			r.Method == http.MethodGet && !p.session.Valid(r)
+
+		// Request-header mutations toward the backend (WAF already ran).
+		if hasHeaderOps(v.Headers.Request) {
+			applyHeaderOps(r.Header, v.Headers.Request)
+		}
 
 		// The client-facing writer: raw for upgrades (so the hijack can
 		// take over the connection), compressed otherwise.
@@ -454,16 +471,25 @@ func (p *Proxy) acmePassthrough(w http.ResponseWriter, r *http.Request, cfg *con
 	rp.ServeHTTP(w, r)
 }
 
-// statusWriter records final status and bytes for metrics/access log.
+// statusWriter records final status and bytes for metrics/access log,
+// and applies the vhost's response-header mutations on the final
+// header — covering both proxied responses and gated-generated pages.
 type statusWriter struct {
 	http.ResponseWriter
-	status int
-	bytes  int64
+	status  int
+	bytes   int64
+	respOps vhost.HeaderOps
+	opsDone bool
+	hasOps  bool
 }
 
 func (sw *statusWriter) WriteHeader(code int) {
 	if code >= 200 {
 		sw.status = code
+		if sw.hasOps && !sw.opsDone {
+			sw.opsDone = true
+			applyHeaderOps(sw.Header(), sw.respOps)
+		}
 	}
 	sw.ResponseWriter.WriteHeader(code)
 }
@@ -528,6 +554,85 @@ func bufferBody(r *http.Request, limit int64) string {
 	}
 	r.Body = io.NopCloser(bytes.NewReader(buf))
 	return string(buf)
+}
+
+// applyHeaderOps mutates h: Remove first, then Set (override), then Add.
+func applyHeaderOps(h http.Header, ops vhost.HeaderOps) {
+	for _, k := range ops.Remove {
+		h.Del(k)
+	}
+	for k, v := range ops.Set {
+		h.Set(k, v)
+	}
+	for k, v := range ops.Add {
+		h.Add(k, v)
+	}
+}
+
+// hasHeaderOps reports whether ops does anything.
+func hasHeaderOps(ops vhost.HeaderOps) bool {
+	return len(ops.Set) > 0 || len(ops.Add) > 0 || len(ops.Remove) > 0
+}
+
+// applyCORS handles cross-origin requests: it sets the CORS response
+// headers for an allowed Origin and answers preflight OPTIONS directly.
+// Returns true when the request was fully handled (preflight).
+func applyCORS(w http.ResponseWriter, r *http.Request, c vhost.CORS) bool {
+	if !c.Enabled {
+		return false
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return false
+	}
+	allow := corsAllowedOrigin(origin, c.AllowOrigins, c.AllowCredentials)
+	if allow == "" {
+		return false // origin not allowed: emit no CORS headers
+	}
+	h := w.Header()
+	h.Set("Access-Control-Allow-Origin", allow)
+	if allow != "*" {
+		h.Add("Vary", "Origin")
+	}
+	if c.AllowCredentials {
+		h.Set("Access-Control-Allow-Credentials", "true")
+	}
+	if len(c.ExposeHeaders) > 0 {
+		h.Set("Access-Control-Expose-Headers", strings.Join(c.ExposeHeaders, ", "))
+	}
+	// Preflight: answer directly, do not reach the backend.
+	if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
+		if len(c.AllowMethods) > 0 {
+			h.Set("Access-Control-Allow-Methods", strings.Join(c.AllowMethods, ", "))
+		}
+		if len(c.AllowHeaders) > 0 {
+			h.Set("Access-Control-Allow-Headers", strings.Join(c.AllowHeaders, ", "))
+		}
+		if c.MaxAge.Std() > 0 {
+			h.Set("Access-Control-Max-Age", strconv.Itoa(int(c.MaxAge.Std().Seconds())))
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return true
+	}
+	return false
+}
+
+// corsAllowedOrigin returns the value for Access-Control-Allow-Origin,
+// or "" if the origin is not allowed. A "*" allowlist echoes the origin
+// when credentials are enabled (wildcard + credentials is invalid).
+func corsAllowedOrigin(origin string, allow []string, credentials bool) string {
+	for _, a := range allow {
+		if a == "*" {
+			if credentials {
+				return origin
+			}
+			return "*"
+		}
+		if a == origin {
+			return origin
+		}
+	}
+	return ""
 }
 
 // isUpgradeRequest reports whether the request asks to switch protocol

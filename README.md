@@ -27,6 +27,9 @@ point of the server, in front of any service.
   bidirectionally, compression bypassed); Server-Sent Events stream
   unbuffered
 - Compression: zstd, brotli, gzip (negotiated, per-vhost overridable)
+- Per-vhost header rewriting (add/set/remove on requests and responses,
+  e.g. security headers like HSTS/X-Frame-Options; strip `Server`) and
+  CORS (allowed origins/methods/headers, credentials, preflight)
 - Real IP resolution with trusted proxies (`X-Forwarded-For` walked
   right-to-left)
 - Certificates reused from the conventional Let's Encrypt layout

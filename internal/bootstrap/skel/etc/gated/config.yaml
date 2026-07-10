@@ -70,6 +70,18 @@ waf:
   mode: block                   # block | detect
   max_body_bytes: 131072        # request body inspected up to this size (0 = never)
 
+challenge:
+  # Browser-challenge action ("Checking your browser" interstitial).
+  # The clearance cookie is HMAC-signed and bound to the client IP.
+  secret: ""                    # HMAC key; empty = random per start (clearances reset on restart)
+  difficulty: 0                 # SHA-256 proof-of-work leading zero bits; 0 = JS challenge only
+  clearance_ttl: 30m            # how long a passed challenge lasts
+
+pages:
+  # Styled error/challenge pages. Built-in templates are used unless
+  # you drop message.html / challenge.html into this directory.
+  dir: "/etc/gated/pages"
+
 api:
   # Optional management REST API. Disabled by default; enabling it
   # REQUIRES a token and makes /etc/gated/vhosts writable (see the

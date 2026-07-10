@@ -12,6 +12,9 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -24,24 +27,31 @@ import (
 
 	"github.com/ostap-mykhaylyak/gated/internal/balancer"
 	"github.com/ostap-mykhaylyak/gated/internal/certs"
+	"github.com/ostap-mykhaylyak/gated/internal/challenge"
 	"github.com/ostap-mykhaylyak/gated/internal/compress"
 	"github.com/ostap-mykhaylyak/gated/internal/config"
 	"github.com/ostap-mykhaylyak/gated/internal/geoip"
 	"github.com/ostap-mykhaylyak/gated/internal/logging"
 	"github.com/ostap-mykhaylyak/gated/internal/metrics"
+	"github.com/ostap-mykhaylyak/gated/internal/pages"
 	"github.com/ostap-mykhaylyak/gated/internal/vhost"
 	"github.com/ostap-mykhaylyak/gated/internal/waf"
 )
 
+// challengePath is the reserved endpoint the interstitial JS posts to.
+const challengePath = "/.gated/challenge"
+
 // Proxy holds the wiring shared by every request.
 type Proxy struct {
-	cfg    *config.Manager
-	vhosts *vhost.Store
-	certs  *certs.Store
-	waf    *waf.Engine
-	geoip  *geoip.Resolver // nil when geoip is disabled
-	m      *metrics.Metrics
-	logs   *logging.Streams
+	cfg       *config.Manager
+	vhosts    *vhost.Store
+	certs     *certs.Store
+	waf       *waf.Engine
+	geoip     *geoip.Resolver // nil when geoip is disabled
+	challenge *challenge.Manager
+	pages     *pages.Pages
+	m         *metrics.Metrics
+	logs      *logging.Streams
 
 	transport  *http.Transport
 	resolver   resolverHolder
@@ -51,16 +61,18 @@ type Proxy struct {
 // New builds the Proxy. The backend transport is created once (its
 // ResponseHeaderTimeout comes from the initial config; changing
 // backend_timeout requires a restart, unlike everything else).
-func New(cfg *config.Manager, vhosts *vhost.Store, certStore *certs.Store, wafEngine *waf.Engine, geo *geoip.Resolver, m *metrics.Metrics, logs *logging.Streams) *Proxy {
+func New(cfg *config.Manager, vhosts *vhost.Store, certStore *certs.Store, wafEngine *waf.Engine, geo *geoip.Resolver, chal *challenge.Manager, pg *pages.Pages, m *metrics.Metrics, logs *logging.Streams) *Proxy {
 	c := cfg.Get()
 	return &Proxy{
-		cfg:    cfg,
-		vhosts: vhosts,
-		certs:  certStore,
-		waf:    wafEngine,
-		geoip:  geo,
-		m:      m,
-		logs:   logs,
+		cfg:       cfg,
+		vhosts:    vhosts,
+		certs:     certStore,
+		waf:       wafEngine,
+		geoip:     geo,
+		challenge: chal,
+		pages:     pg,
+		m:         m,
+		logs:      logs,
 		transport: &http.Transport{
 			DialContext: (&net.Dialer{
 				Timeout:   10 * time.Second,
@@ -90,6 +102,8 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 		cfg := p.cfg.Get()
 		clientIP := p.resolver.get(cfg).clientIP(r)
 		host := normalizeHost(r.Host)
+		reqID := newRequestID()
+		sw.Header().Set("Gated-Ray-Id", reqID)
 
 		var backendURL string
 		var failed bool
@@ -100,6 +114,7 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 				p.waf.ObserveResponse(wafPending, clientIP, sw.status)
 			}
 			p.logs.Access.Info("request",
+				"ray_id", reqID,
 				"host", host,
 				"method", r.Method,
 				"path", r.URL.Path,
@@ -121,9 +136,20 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 			return
 		}
 
+		// Challenge-solving endpoint: handled before WAF/vhost so the
+		// interstitial's own POST is never inspected or blocked.
+		if r.URL.Path == challengePath {
+			p.solveChallenge(sw, r, clientIP)
+			return
+		}
+
 		v := p.vhosts.Lookup(host)
 		if v == nil {
-			http.Error(sw, "unknown host", http.StatusNotFound)
+			p.pages.Message(sw, pages.MessageData{
+				Code: http.StatusNotFound, Title: "Not Found",
+				Message: "This host is not configured on this server.",
+				Host:    host, RequestID: reqID,
+			})
 			return
 		}
 
@@ -142,7 +168,32 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 			dec, pending := p.waf.Evaluate(wctx, v.WAFPol)
 			wafPending = pending
 			if dec.Block {
-				http.Error(sw, "forbidden", dec.Status)
+				p.m.WAFBlock()
+				p.logs.WAF.Info("waf enforce", "ray_id", reqID, "action", "block",
+					"rule", dec.RuleID, "ip", clientIP, "host", host, "path", r.URL.Path)
+				p.pages.Message(sw, pages.MessageData{
+					Code: dec.Status, Title: "Request Blocked",
+					Message: "This request was blocked by the security rules. If you believe this is an error, contact the site administrator.",
+					Host:    host, RequestID: reqID,
+				})
+				return
+			}
+			// Challenge: unless the client already holds a valid
+			// clearance cookie, present the interstitial. Prefer HTTPS
+			// so the (optional) SubtleCrypto PoW has a secure context.
+			if dec.Challenge && !p.challenge.HasClearance(r, clientIP) {
+				if !secure && v.RedirectToHTTPS {
+					http.Redirect(sw, r, "https://"+host+r.URL.RequestURI(), http.StatusPermanentRedirect)
+					return
+				}
+				p.m.WAFChallenge()
+				p.logs.WAF.Info("waf enforce", "ray_id", reqID, "action", "challenge",
+					"rule", dec.RuleID, "ip", clientIP, "host", host, "path", r.URL.Path)
+				token, c := p.challenge.Issue()
+				p.pages.Challenge(sw, pages.ChallengeData{
+					Token: token, C: c, Difficulty: p.challenge.Difficulty(),
+					Endpoint: challengePath, Host: host, RequestID: reqID,
+				})
 				return
 			}
 		}
@@ -177,7 +228,11 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 			b := v.Pool.Pick(r, clientIP)
 			if b == nil {
 				failed = true
-				http.Error(cw, "no backend available", http.StatusServiceUnavailable)
+				p.pages.Message(cw, pages.MessageData{
+					Code: http.StatusServiceUnavailable, Title: "Service Unavailable",
+					Message: "No backend server is available to handle your request right now. Please try again shortly.",
+					Host:    host, RequestID: reqID,
+				})
 				return
 			}
 			backendURL = b.URL.String()
@@ -212,8 +267,51 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 			}
 		}
 		failed = true
-		http.Error(cw, "bad gateway", http.StatusBadGateway)
+		p.pages.Message(cw, pages.MessageData{
+			Code: http.StatusBadGateway, Title: "Backend Down",
+			Message: "The upstream server is unreachable or returned an invalid response. Please try again later.",
+			Host:    host, RequestID: reqID,
+		})
 	})
+}
+
+// solveChallenge handles POST /.gated/challenge: it verifies the
+// interstitial's token (and PoW, if any) and, on success, issues the
+// clearance cookie the client replays on its next request.
+func (p *Proxy) solveChallenge(w http.ResponseWriter, r *http.Request, clientIP string) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Token string `json:"token"`
+		Nonce string `json:"nonce"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 8<<10)).Decode(&body); err != nil {
+		http.Error(w, `{"ok":false}`, http.StatusBadRequest)
+		return
+	}
+	ck, ok := p.challenge.Verify(body.Token, body.Nonce, clientIP)
+	if !ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		io.WriteString(w, `{"ok":false}`)
+		return
+	}
+	ck.Secure = r.TLS != nil
+	http.SetCookie(w, ck)
+	p.m.WAFClear()
+	w.Header().Set("Content-Type", "application/json")
+	io.WriteString(w, `{"ok":true}`)
+}
+
+// newRequestID returns a short random hex id used as the response
+// "Ray ID" and access-log correlation key.
+func newRequestID() string {
+	var b [8]byte
+	rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }
 
 // forward proxies the request to one backend. Returns the transport

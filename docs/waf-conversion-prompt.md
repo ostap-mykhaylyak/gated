@@ -124,6 +124,14 @@ Trasformazioni ModSecurity senza equivalente (`t:cssDecode`,
 | `log`   | solo registrare, non bloccare | ModSec `pass` + `log` |
 | `allow` | whitelist: passa e **vince** su ogni block | ModSec `allow` |
 | `ban`   | conteggio stateful + ban IP (richiede `track`) | fail2ban |
+| `challenge` | interstitial "browser challenge" (JS + PoW opzionale) | — (stile Cloudflare) |
+
+> `challenge` mostra una pagina che, superata (esegue JS ed eventuale
+> proof-of-work), rilascia un cookie di clearance: i client legittimi
+> passano, i bot/scanner scriptati no. Usalo dove vuoi filtrare senza
+> bloccare del tutto (es. un intero paese via `field: country`).
+> Precedenza: `allow` > `block` > `challenge`. In `mode: detect` non
+> viene applicato (solo log).
 
 Regola d'oro: **`allow` batte tutto**. Le regole `allow` vengono
 valutate per prime; se una combacia, la richiesta passa senza eseguire

@@ -18,15 +18,19 @@ type Metrics struct {
 	bytesOut      atomic.Int64
 	inFlight      atomic.Int64
 
-	wafInspected atomic.Int64
-	wafBlocked   atomic.Int64
-	wafBanned    atomic.Int64
+	wafInspected  atomic.Int64
+	wafBlocked    atomic.Int64
+	wafBanned     atomic.Int64
+	wafChallenged atomic.Int64
+	wafCleared    atomic.Int64
 }
 
 // WAF counters, updated on the hot path by the WAF engine.
-func (m *Metrics) WAFInspect() { m.wafInspected.Add(1) }
-func (m *Metrics) WAFBlock()   { m.wafBlocked.Add(1) }
-func (m *Metrics) WAFBan()     { m.wafBanned.Add(1) }
+func (m *Metrics) WAFInspect()   { m.wafInspected.Add(1) }
+func (m *Metrics) WAFBlock()     { m.wafBlocked.Add(1) }
+func (m *Metrics) WAFBan()       { m.wafBanned.Add(1) }
+func (m *Metrics) WAFChallenge() { m.wafChallenged.Add(1) }
+func (m *Metrics) WAFClear()     { m.wafCleared.Add(1) }
 
 // New returns a Metrics anchored at the current time.
 func New() *Metrics { return &Metrics{start: time.Now()} }
@@ -56,6 +60,8 @@ type Snapshot struct {
 	WAFInspected     int64     `json:"waf_inspected"`
 	WAFBlocked       int64     `json:"waf_blocked"`
 	WAFBanned        int64     `json:"waf_banned"`
+	WAFChallenged    int64     `json:"waf_challenged"`
+	WAFCleared       int64     `json:"waf_cleared"`
 	Timestamp        time.Time `json:"timestamp"`
 }
 
@@ -70,6 +76,8 @@ func (m *Metrics) Snapshot() Snapshot {
 		WAFInspected:     m.wafInspected.Load(),
 		WAFBlocked:       m.wafBlocked.Load(),
 		WAFBanned:        m.wafBanned.Load(),
+		WAFChallenged:    m.wafChallenged.Load(),
+		WAFCleared:       m.wafCleared.Load(),
 		Timestamp:        time.Now().UTC(),
 	}
 }

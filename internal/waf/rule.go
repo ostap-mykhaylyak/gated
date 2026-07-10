@@ -76,14 +76,15 @@ var knownOps = map[Operator]bool{
 type Action string
 
 const (
-	ActionBlock Action = "block" // deny with Status
-	ActionLog   Action = "log"   // record only, keep processing
-	ActionAllow Action = "allow" // whitelist: stop and let the request through
-	ActionBan   Action = "ban"   // count and, past threshold, ban the client IP
+	ActionBlock     Action = "block"     // deny with Status
+	ActionLog       Action = "log"       // record only, keep processing
+	ActionAllow     Action = "allow"     // whitelist: stop and let the request through
+	ActionBan       Action = "ban"       // count and, past threshold, ban the client IP
+	ActionChallenge Action = "challenge" // require a browser challenge (interstitial)
 )
 
 var knownActions = map[Action]bool{
-	ActionBlock: true, ActionLog: true, ActionAllow: true, ActionBan: true,
+	ActionBlock: true, ActionLog: true, ActionAllow: true, ActionBan: true, ActionChallenge: true,
 }
 
 // Severity is informational, surfaced in logs and metrics.

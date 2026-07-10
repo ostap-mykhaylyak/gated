@@ -133,13 +133,15 @@ func (cs *compiledSet) add(ru *Rule) {
 	}
 }
 
-// Decision is the outcome of evaluating a request.
+// Decision is the outcome of evaluating a request. Block wins over
+// Challenge when both would apply.
 type Decision struct {
-	Block    bool
-	Status   int
-	RuleID   string
-	Msg      string
-	Severity Severity
+	Block     bool
+	Challenge bool
+	Status    int
+	RuleID    string
+	Msg       string
+	Severity  Severity
 }
 
 // Evaluate runs the request-phase rules for one request. It returns the
@@ -170,7 +172,9 @@ func (e *Engine) Evaluate(ctx *evalCtx, policy Policy) (Decision, []*Rule) {
 		}
 	}
 
-	// Enforced rules.
+	// Enforced rules. Block wins and returns immediately; a challenge
+	// is remembered and returned only if no later rule blocks.
+	var challenge Decision
 	for _, ru := range cs.request {
 		if policy.excluded(ru.ID) || !ru.eval(ctx) {
 			continue
@@ -186,11 +190,20 @@ func (e *Engine) Evaluate(ctx *evalCtx, policy Policy) (Decision, []*Rule) {
 		block := ru.Action == ActionBlock || (ru.Action == ActionBan && bannedNow)
 		e.log.Info("waf match", "rule", ru.ID, "action", ru.Action, "ip", ctx.clientIP,
 			"method", ctx.r.Method, "path", ctx.r.URL.Path, "msg", ru.Msg,
-			"severity", ru.Severity, "enforced", block && !policy.Detect)
-		if block && !policy.Detect {
+			"severity", ru.Severity, "enforced", (block || ru.Action == ActionChallenge) && !policy.Detect)
+		if policy.Detect {
+			continue // detect mode: log only, never enforce
+		}
+		if block {
 			e.m.WAFBlock()
 			return Decision{Block: true, Status: ru.blockStatus(), RuleID: ru.ID, Msg: ru.Msg, Severity: ru.Severity}, nil
 		}
+		if ru.Action == ActionChallenge && !challenge.Challenge {
+			challenge = Decision{Challenge: true, Status: ru.blockStatus(), RuleID: ru.ID, Msg: ru.Msg, Severity: ru.Severity}
+		}
+	}
+	if challenge.Challenge {
+		return challenge, nil
 	}
 
 	// Collect response-tracked rules whose request part matched.

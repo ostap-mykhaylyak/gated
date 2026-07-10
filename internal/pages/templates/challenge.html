@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Checking your browser…</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center;
+    justify-content: center; padding: 2rem;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #f6f7f9; color: #1d1f21;
+  }
+  .card {
+    width: 100%; max-width: 34rem; background: #fff; border-radius: 14px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.08), 0 10px 40px rgba(0,0,0,.06);
+    padding: 2.5rem; text-align: center;
+  }
+  h1 { font-size: 1.4rem; font-weight: 600; margin: 0 0 .6rem; }
+  p.msg { color: #565a5f; line-height: 1.55; margin: 0 0 1.75rem; }
+  .spinner {
+    width: 34px; height: 34px; margin: 0 auto 1.5rem; border-radius: 50%;
+    border: 3px solid #e2e4e7; border-top-color: #f6821f; animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .meta {
+    border-top: 1px solid #ecedef; padding-top: 1.1rem; font-size: .8rem;
+    color: #8a8f95; display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
+  }
+  .meta code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #565a5f; }
+  .brand { font-weight: 600; }
+  noscript { color: #b23; display: block; margin-bottom: 1rem; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #0f1114; color: #e6e8ea; }
+    .card { background: #16191d; box-shadow: 0 1px 3px rgba(0,0,0,.4), 0 10px 40px rgba(0,0,0,.5); }
+    p.msg { color: #a4a9af; } .spinner { border-color: #24282d; border-top-color: #f6821f; }
+    .meta { border-top-color: #24282d; color: #6b7178; } .meta code { color: #a4a9af; }
+  }
+</style>
+</head>
+<body>
+  <main class="card">
+    <div class="spinner" id="spin"></div>
+    <h1>Checking your browser</h1>
+    <p class="msg" id="msg">This automatic process verifies that you are a human before continuing.</p>
+    <noscript>This site requires JavaScript to be enabled to continue.</noscript>
+    <div class="meta">
+      <span>{{if .Host}}Host: <code>{{.Host}}</code>{{end}}</span>
+      <span>Ray ID: <code>{{.RequestID}}</code></span>
+      <span class="brand">gated</span>
+    </div>
+  </main>
+<script>
+(function () {
+  var token = {{.Token}};
+  var c = {{.C}};
+  var difficulty = {{.Difficulty}};
+  var endpoint = {{.Endpoint}};
+
+  function lzb(bytes) {
+    var n = 0;
+    for (var i = 0; i < bytes.length; i++) {
+      var x = bytes[i];
+      if (x === 0) { n += 8; continue; }
+      for (var b = 7; b >= 0; b--) {
+        if ((x & (1 << b)) === 0) { n++; } else { return n; }
+      }
+    }
+    return n;
+  }
+
+  async function solve() {
+    if (difficulty <= 0 || !(window.crypto && crypto.subtle)) return "";
+    var enc = new TextEncoder();
+    for (var i = 0; ; i++) {
+      var digest = new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(c + ":" + i)));
+      if (lzb(digest) >= difficulty) return String(i);
+    }
+  }
+
+  async function run() {
+    try {
+      var nonce = await solve();
+      var res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ token: token, nonce: nonce })
+      });
+      if (res.ok) { location.reload(); return; }
+    } catch (e) {}
+    document.getElementById("spin").style.display = "none";
+    document.getElementById("msg").textContent = "Verification failed. Please refresh the page to try again.";
+  }
+
+  window.addEventListener("load", function () { setTimeout(run, 500); });
+})();
+</script>
+</body>
+</html>

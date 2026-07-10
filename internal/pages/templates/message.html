@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>{{.Code}} · {{.Title}}</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center;
+    justify-content: center; padding: 2rem;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #f6f7f9; color: #1d1f21;
+  }
+  .card {
+    width: 100%; max-width: 34rem; background: #fff; border-radius: 14px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.08), 0 10px 40px rgba(0,0,0,.06);
+    padding: 2.5rem; text-align: center;
+  }
+  .code { font-size: 3.25rem; font-weight: 700; letter-spacing: -.02em; margin: 0; }
+  .title { font-size: 1.25rem; font-weight: 600; margin: .35rem 0 1rem; }
+  .msg { color: #565a5f; line-height: 1.55; margin: 0 0 1.75rem; }
+  .meta {
+    border-top: 1px solid #ecedef; padding-top: 1.1rem; font-size: .8rem;
+    color: #8a8f95; display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
+  }
+  .meta code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #565a5f; }
+  .brand { font-weight: 600; letter-spacing: .01em; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #0f1114; color: #e6e8ea; }
+    .card { background: #16191d; box-shadow: 0 1px 3px rgba(0,0,0,.4), 0 10px 40px rgba(0,0,0,.5); }
+    .msg { color: #a4a9af; } .meta { border-top-color: #24282d; color: #6b7178; }
+    .meta code { color: #a4a9af; }
+  }
+</style>
+</head>
+<body>
+  <main class="card">
+    <p class="code">{{.Code}}</p>
+    <p class="title">{{.Title}}</p>
+    <p class="msg">{{.Message}}</p>
+    <div class="meta">
+      <span>{{if .Host}}Host: <code>{{.Host}}</code>{{end}}</span>
+      <span>Ray ID: <code>{{.RequestID}}</code></span>
+      <span class="brand">gated</span>
+    </div>
+  </main>
+</body>
+</html>

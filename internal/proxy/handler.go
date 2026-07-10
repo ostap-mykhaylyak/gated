@@ -262,6 +262,23 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 			applyHeaderOps(r.Header, v.Headers.Request)
 		}
 
+		// Path routing: pick the matching route's pool (or a canary
+		// split), and apply any path rewrite before proxying. No match
+		// falls back to the vhost's default backends.
+		pool := v.Pool
+		if route := v.MatchRoute(r.Method, r.URL.Path); route != nil {
+			if route.Pool != nil {
+				pool = route.Pool
+			}
+			if route.Hit(r) {
+				pool = route.Canary.Pool
+			}
+			if np := route.RewritePath(r.URL.Path); np != r.URL.Path {
+				r.URL.Path = np
+				r.URL.RawPath = ""
+			}
+		}
+
 		// The client-facing writer: raw for upgrades (so the hijack can
 		// take over the connection), compressed otherwise.
 		cw := http.ResponseWriter(sw)
@@ -274,8 +291,8 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 		// Balancer + retries: a transport-level failure on a
 		// replayable request (no body consumed, nothing written to the
 		// client) moves on to the next backend.
-		for attempt := 0; attempt < len(v.Backends); attempt++ {
-			b := v.Pool.Pick(r, clientIP)
+		for attempt := 0; attempt < len(pool.Backends()); attempt++ {
+			b := pool.Pick(r, clientIP)
 			if b == nil {
 				failed = true
 				p.pages.Message(cw, pages.MessageData{
@@ -287,7 +304,7 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 			}
 			backendURL = b.URL.String()
 
-			if st := v.Pool.Sticky(); st.Enabled {
+			if st := pool.Sticky(); st.Enabled {
 				if c, err := r.Cookie(st.Cookie); err != nil || c.Value != b.ID {
 					ck := http.Cookie{
 						Name:     st.Cookie,
@@ -305,7 +322,7 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 			}
 
 			err, wrote := p.forward(cw, r, b, clientIP, secure, issueVisit, v.Transport, v.Hosts)
-			v.Pool.Report(b, err == nil)
+			pool.Report(b, err == nil)
 			if err == nil {
 				return
 			}

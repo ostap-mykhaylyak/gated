@@ -37,7 +37,7 @@ const (
 // default config WITHOUT overwriting an existing one. Used both by
 // --init and by the first daemon start without a config.
 func EnsureLayout(out io.Writer) error {
-	for _, dir := range []string{paths.ConfigDir, paths.VhostsDir, paths.WAFDir, paths.LogDir} {
+	for _, dir := range []string{paths.ConfigDir, paths.VhostsDir, paths.WAFDir, paths.PagesDir, paths.LogDir} {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return fmt.Errorf("create %s: %w", dir, err)
 		}

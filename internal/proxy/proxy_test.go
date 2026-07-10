@@ -10,11 +10,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ostap-mykhaylyak/gated/internal/certs"
+	"github.com/ostap-mykhaylyak/gated/internal/challenge"
 	"github.com/ostap-mykhaylyak/gated/internal/config"
 	"github.com/ostap-mykhaylyak/gated/internal/logging"
 	"github.com/ostap-mykhaylyak/gated/internal/metrics"
+	"github.com/ostap-mykhaylyak/gated/internal/pages"
 	"github.com/ostap-mykhaylyak/gated/internal/vhost"
 	"github.com/ostap-mykhaylyak/gated/internal/waf"
 )
@@ -52,7 +55,12 @@ func newTestProxy(t *testing.T, globalYAML string, vhostFiles map[string]string)
 	wafEngine.LoadAll()
 	t.Cleanup(func() { logs.Close(); store.Close(); wafEngine.Close() })
 
-	return New(mgr, store, certs.New(t.TempDir()), wafEngine, nil, m, logs)
+	pg, err := pages.New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chal := challenge.NewManager("test-secret", 0, time.Minute)
+	return New(mgr, store, certs.New(t.TempDir()), wafEngine, nil, chal, pg, m, logs)
 }
 
 func vhostYAML(backendURL string, extra string) string {
@@ -189,7 +197,9 @@ func wafProxy(t *testing.T, backendURL, wafRules string) http.Handler {
 	wafEngine.LoadAll()
 	t.Cleanup(func() { logs.Close(); store.Close(); wafEngine.Close() })
 
-	return New(mgr, store, certs.New(t.TempDir()), wafEngine, nil, m, logs).Handler(true)
+	pg, _ := pages.New("")
+	chal := challenge.NewManager("test-secret", 0, time.Minute)
+	return New(mgr, store, certs.New(t.TempDir()), wafEngine, nil, chal, pg, m, logs).Handler(true)
 }
 
 func TestWAFBlocksThroughProxy(t *testing.T) {
@@ -272,6 +282,88 @@ rules:
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("malicious body must be 403, got %d", rec.Code)
 	}
+}
+
+func TestChallengeFlowThroughProxy(t *testing.T) {
+	reached := 0
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached++
+		io.WriteString(w, "backend")
+	}))
+	defer backend.Close()
+
+	h := wafProxy(t, backend.URL, `
+rules:
+  - id: "geo-challenge-us"
+    action: challenge
+    match:
+      - field: path
+        operator: prefix
+        patterns: ["/"]
+`)
+
+	// First request with no clearance: served the interstitial (403),
+	// backend not reached.
+	req := httptest.NewRequest("GET", "https://app.test/", nil)
+	req.Host = "app.test"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("challenge must return 403 interstitial, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Checking your browser") {
+		t.Fatal("challenge page not served")
+	}
+	if reached != 0 {
+		t.Fatal("backend must not be reached before clearance")
+	}
+	if rec.Header().Get("Gated-Ray-Id") == "" {
+		t.Fatal("Ray ID header missing")
+	}
+
+	// Solve the challenge: POST the token to /.gated/challenge and get
+	// the clearance cookie.
+	token := extractToken(t, rec.Body.String())
+	solve := httptest.NewRequest("POST", "https://app.test/.gated/challenge",
+		strings.NewReader(`{"token":"`+token+`","nonce":""}`))
+	solve.Host = "app.test"
+	solve.Header.Set("Content-Type", "application/json")
+	sRec := httptest.NewRecorder()
+	h.ServeHTTP(sRec, solve)
+	if sRec.Code != 200 {
+		t.Fatalf("challenge solve must succeed, got %d: %s", sRec.Code, sRec.Body.String())
+	}
+	cookies := sRec.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("no clearance cookie issued")
+	}
+
+	// Retry with the clearance cookie: passes through to the backend.
+	req2 := httptest.NewRequest("GET", "https://app.test/", nil)
+	req2.Host = "app.test"
+	for _, ck := range cookies {
+		req2.AddCookie(ck)
+	}
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, req2)
+	if rec2.Code != 200 || rec2.Body.String() != "backend" {
+		t.Fatalf("cleared client must reach backend: %d %q", rec2.Code, rec2.Body.String())
+	}
+}
+
+// extractToken pulls the token literal out of the challenge page JS
+// (var token = "....";).
+func extractToken(t *testing.T, body string) string {
+	t.Helper()
+	const marker = "var token = "
+	i := strings.Index(body, marker)
+	if i < 0 {
+		t.Fatal("token not found in challenge page")
+	}
+	rest := body[i+len(marker):]
+	start := strings.IndexByte(rest, '"')
+	end := strings.IndexByte(rest[start+1:], '"')
+	return rest[start+1 : start+1+end]
 }
 
 func TestCompressionApplied(t *testing.T) {

@@ -32,6 +32,13 @@ point of the server, in front of any service.
 - **GeoIP** (MaxMind `.mmdb` from the conventional `/usr/share/GeoIP/`,
   hot-swapped on refresh): the WAF `country`/`continent`/`asn` fields
   let you block or ban by geography, e.g. deny traffic from a country.
+- **Browser challenge** (`challenge` action, Cloudflare-style): serves a
+  "Checking your browser" interstitial that must run JS (and optionally
+  solve a SHA-256 proof of work) to earn a signed, IP-bound clearance
+  cookie — e.g. challenge a whole country instead of hard-blocking it.
+- **Styled pages** for blocked requests, browser challenge, 404,
+  backend-down (502/503), each with a Ray ID for log correlation;
+  built-in templates overridable from `/etc/gated/pages/`.
 - Optional management REST API (vhosts as REST resources, versioned
   writes with rollback)
 

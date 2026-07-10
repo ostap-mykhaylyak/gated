@@ -19,6 +19,10 @@ const (
 	// WAFDir holds the WAF rule files (one group per YAML file).
 	WAFDir = ConfigDir + "/waf"
 
+	// PagesDir holds optional overrides for the styled error/challenge
+	// pages (message.html, challenge.html).
+	PagesDir = ConfigDir + "/pages"
+
 	// LogDir holds all log files and runtime state. It is the only
 	// path the daemon is guaranteed to be able to write to.
 	LogDir = "/var/log/gated"

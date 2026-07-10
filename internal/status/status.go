@@ -80,6 +80,8 @@ type WAFSection struct {
 	ActiveBans int   `json:"active_bans"`
 	Blocked    int64 `json:"blocked"`
 	Banned     int64 `json:"banned"`
+	Challenged int64 `json:"challenged"`
+	Cleared    int64 `json:"cleared"`
 }
 
 // GeoIPSection describes the GeoIP resolver state.
@@ -178,6 +180,8 @@ func NewCollector(version string, mgr *config.Manager, vhosts *vhost.Store, wafE
 			ActiveBans: wafEngine.ActiveBans(),
 			Blocked:    live.WAFBlocked,
 			Banned:     live.WAFBanned,
+			Challenged: live.WAFChallenged,
+			Cleared:    live.WAFCleared,
 		}
 
 		if cfg.GeoIP.Enabled {

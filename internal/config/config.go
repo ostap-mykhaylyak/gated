@@ -54,6 +54,8 @@ type Config struct {
 	Health      Health      `yaml:"health"`
 	GeoIP       GeoIP       `yaml:"geoip"`
 	WAF         WAF         `yaml:"waf"`
+	Challenge   Challenge   `yaml:"challenge"`
+	Pages       Pages       `yaml:"pages"`
 	API         API         `yaml:"api"`
 
 	// Warnings collects non-fatal issues found by validate()
@@ -133,6 +135,21 @@ type WAF struct {
 	MaxBodyBytes int64  `yaml:"max_body_bytes"` // request body inspected up to this size
 }
 
+// Challenge configures the browser-challenge action: an interstitial
+// page that must execute JS (and optionally solve a SHA-256 proof of
+// work) to obtain a signed clearance cookie.
+type Challenge struct {
+	Secret       string   `yaml:"secret"`        // HMAC key; empty = random per start
+	Difficulty   int      `yaml:"difficulty"`    // PoW leading zero bits; 0 = JS challenge only
+	ClearanceTTL Duration `yaml:"clearance_ttl"` // how long a passed challenge lasts
+}
+
+// Pages configures the styled error/challenge pages. Built-in
+// templates are used unless an override file exists in Dir.
+type Pages struct {
+	Dir string `yaml:"dir"` // optional; contains message.html / challenge.html
+}
+
 // API configures the optional management REST API (disabled by default).
 type API struct {
 	Enabled bool   `yaml:"enabled"`
@@ -187,6 +204,14 @@ func Default() *Config {
 			RulesDir:     paths.WAFDir,
 			Mode:         "block",
 			MaxBodyBytes: 128 * 1024,
+		},
+		Challenge: Challenge{
+			Secret:       "",
+			Difficulty:   0,
+			ClearanceTTL: Duration(30 * time.Minute),
+		},
+		Pages: Pages{
+			Dir: paths.PagesDir,
 		},
 		API: API{
 			Enabled: false,
@@ -295,6 +320,13 @@ func (c *Config) validate() error {
 	case "block", "detect":
 	default:
 		return fmt.Errorf("waf.mode must be \"block\" or \"detect\", got %q", c.WAF.Mode)
+	}
+
+	if c.Challenge.Difficulty < 0 || c.Challenge.Difficulty > 24 {
+		return fmt.Errorf("challenge.difficulty must be between 0 and 24")
+	}
+	if c.Challenge.ClearanceTTL.Std() <= 0 {
+		return fmt.Errorf("challenge.clearance_ttl must be positive")
 	}
 	if c.WAF.Enabled && c.WAF.RulesDir == "" {
 		return fmt.Errorf("waf.rules_dir is required when waf.enabled is true")

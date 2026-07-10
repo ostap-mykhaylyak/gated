@@ -1,0 +1,67 @@
+# gated WAF - browser challenge and flood/scanner protection.
+#
+# The "challenge" action serves an interstitial ("Checking your
+# browser") that must run JS (and optionally solve a SHA-256 proof of
+# work, see challenge.difficulty in config.yaml) to obtain a clearance
+# cookie. Cleared clients pass without further challenges until the
+# cookie expires (challenge.clearance_ttl).
+#
+# Disabled by default: review and enable per your policy.
+
+group: challenge
+description: Challenge suspicious traffic; block floods and scanners.
+enabled: false
+
+rules:
+  # Send all traffic from a country to the challenge instead of
+  # blocking it outright (requires geoip.enabled). Good for regions you
+  # do not serve but do not want to hard-block.
+  - id: "challenge-country-us"
+    msg: "Challenge country"
+    action: challenge
+    match:
+      - field: country
+        operator: eq
+        patterns: ["US"]
+
+  # Flood toward xmlrpc.php: block hard and ban the IP after a burst.
+  # xmlrpc is a classic WordPress amplification/brute-force vector.
+  - id: "flood-xmlrpc"
+    msg: "xmlrpc flood"
+    severity: high
+    action: ban
+    match:
+      - field: path
+        operator: eq
+        patterns: ["/xmlrpc.php"]
+    track:
+      threshold: 20
+      window: 1m
+      ban_time: 1h
+
+  # Plugin/theme scanner: many 404s in a short window (typical of a bot
+  # probing /wp-content/plugins/*). Count the 404 responses and ban.
+  - id: "scanner-404-flood"
+    msg: "404 scanner"
+    severity: medium
+    action: ban
+    match:
+      - field: path
+        operator: rx
+        transform: [lowercase]
+        patterns: ['^/wp-content/plugins/', '^/wp-content/themes/']
+    track:
+      threshold: 15
+      window: 2m
+      ban_time: 1h
+      on_status: [404]
+
+  # Challenge anything hitting the login while under suspicion (pair
+  # with the fail2ban wp-login rule in 20-fail2ban.yaml).
+  - id: "challenge-login"
+    msg: "Challenge login"
+    action: challenge
+    match:
+      - field: path
+        operator: eq
+        patterns: ["/wp-login.php"]

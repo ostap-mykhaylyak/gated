@@ -324,6 +324,75 @@ rules:
 	}
 }
 
+func TestChallengeAction(t *testing.T) {
+	e := newEngine(t, map[string]string{"x.yaml": `
+rules:
+  - id: "challenge-us"
+    action: challenge
+    match:
+      - field: country
+        operator: eq
+        patterns: ["US"]
+`})
+	ctx := NewContext(req("GET", "/"), "1.2.3.4", "")
+	ctx.SetGeo("US", "NA", "")
+	dec, _ := e.Evaluate(ctx, block)
+	if !dec.Challenge || dec.Block {
+		t.Fatalf("US must be challenged, not blocked: %+v", dec)
+	}
+
+	// Non-US: no challenge.
+	ctx = NewContext(req("GET", "/"), "1.2.3.4", "")
+	ctx.SetGeo("IT", "EU", "")
+	if dec, _ := e.Evaluate(ctx, block); dec.Challenge || dec.Block {
+		t.Fatalf("IT must pass: %+v", dec)
+	}
+}
+
+func TestBlockWinsOverChallenge(t *testing.T) {
+	// A block rule and a challenge rule both match; block must win.
+	e := newEngine(t, map[string]string{"x.yaml": `
+rules:
+  - id: "challenge-all"
+    action: challenge
+    match:
+      - field: path
+        operator: prefix
+        patterns: ["/"]
+  - id: "block-admin"
+    action: block
+    match:
+      - field: path
+        operator: prefix
+        patterns: ["/admin"]
+`})
+	dec, _ := e.Evaluate(NewContext(req("GET", "/admin"), "1.2.3.4", ""), block)
+	if !dec.Block || dec.RuleID != "block-admin" {
+		t.Fatalf("block must win over challenge: %+v", dec)
+	}
+	// A non-admin path only matches the challenge rule.
+	dec, _ = e.Evaluate(NewContext(req("GET", "/home"), "1.2.3.4", ""), block)
+	if !dec.Challenge || dec.Block {
+		t.Fatalf("non-admin path must be challenged: %+v", dec)
+	}
+}
+
+func TestChallengeDetectMode(t *testing.T) {
+	e := newEngine(t, map[string]string{"x.yaml": `
+rules:
+  - id: "challenge-all"
+    action: challenge
+    match:
+      - field: path
+        operator: prefix
+        patterns: ["/"]
+`})
+	dec, _ := e.Evaluate(NewContext(req("GET", "/"), "1.2.3.4", ""), Policy{Enabled: true, Detect: true})
+	if dec.Challenge || dec.Block {
+		t.Fatal("detect mode must not enforce a challenge")
+	}
+}
+
 func TestShippedExampleRulesLoad(t *testing.T) {
 	// The rules shipped in skel must always compile against the engine.
 	src := filepath.Join("..", "bootstrap", "skel", "etc", "gated", "waf")

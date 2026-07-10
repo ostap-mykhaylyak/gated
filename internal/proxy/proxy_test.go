@@ -101,6 +101,69 @@ func TestProxyEndToEnd(t *testing.T) {
 	}
 }
 
+func TestForwardedHTTPSHeaders(t *testing.T) {
+	// The backend must see the request as HTTPS (X-Forwarded-Proto/Ssl/
+	// Port), so a CMS behind gated does not force-redirect to https and
+	// loop.
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Seen-Proto", r.Header.Get("X-Forwarded-Proto"))
+		w.Header().Set("X-Seen-Ssl", r.Header.Get("X-Forwarded-Ssl"))
+		w.Header().Set("X-Seen-Port", r.Header.Get("X-Forwarded-Port"))
+		io.WriteString(w, "ok")
+	}))
+	defer backend.Close()
+
+	p := newTestProxy(t, "{}\n", map[string]string{"app.yaml": vhostYAML(backend.URL, "")})
+	req := httptest.NewRequest("GET", "https://app.test/", nil)
+	req.Host = "app.test"
+	rec := httptest.NewRecorder()
+	p.Handler(true).ServeHTTP(rec, req) // secure listener
+
+	if got := rec.Header().Get("X-Seen-Proto"); got != "https" {
+		t.Fatalf("X-Forwarded-Proto = %q, want https", got)
+	}
+	if got := rec.Header().Get("X-Seen-Ssl"); got != "on" {
+		t.Fatalf("X-Forwarded-Ssl = %q, want on", got)
+	}
+	if got := rec.Header().Get("X-Seen-Port"); got != "443" {
+		t.Fatalf("X-Forwarded-Port = %q, want 443", got)
+	}
+}
+
+func TestRedirectLoopBreak(t *testing.T) {
+	// A CMS that force-redirects its own host to http:// would loop; on
+	// the HTTPS listener gated upgrades the Location to https://.
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/self":
+			http.Redirect(w, r, "http://app.test/dashboard", http.StatusFound)
+		case "/ext":
+			http.Redirect(w, r, "http://other.example/x", http.StatusFound)
+		}
+	}))
+	defer backend.Close()
+
+	p := newTestProxy(t, "{}\n", map[string]string{"app.yaml": vhostYAML(backend.URL, "")})
+
+	// Own-host http redirect -> upgraded to https.
+	req := httptest.NewRequest("GET", "https://app.test/self", nil)
+	req.Host = "app.test"
+	rec := httptest.NewRecorder()
+	p.Handler(true).ServeHTTP(rec, req)
+	if got := rec.Header().Get("Location"); got != "https://app.test/dashboard" {
+		t.Fatalf("own-host redirect not upgraded: %q", got)
+	}
+
+	// Redirect to a different host is left untouched.
+	req = httptest.NewRequest("GET", "https://app.test/ext", nil)
+	req.Host = "app.test"
+	rec = httptest.NewRecorder()
+	p.Handler(true).ServeHTTP(rec, req)
+	if got := rec.Header().Get("Location"); got != "http://other.example/x" {
+		t.Fatalf("external redirect must not be rewritten: %q", got)
+	}
+}
+
 func TestHTTPSBackend(t *testing.T) {
 	// A TLS backend with a self-signed cert on its own :443-style port.
 	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

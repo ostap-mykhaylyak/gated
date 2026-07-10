@@ -21,6 +21,9 @@ point of the server, in front of any service.
   an HTTP backend connection does not bounce forever.
 - TLS/HTTPS, HTTP/2, HTTP/3 (QUIC, advertised via Alt-Svc), Early
   Hints (103)
+- WebSocket and other `Connection: Upgrade` protocols (streamed
+  bidirectionally, compression bypassed); Server-Sent Events stream
+  unbuffered
 - Compression: zstd, brotli, gzip (negotiated, per-vhost overridable)
 - Real IP resolution with trusted proxies (`X-Forwarded-For` walked
   right-to-left)

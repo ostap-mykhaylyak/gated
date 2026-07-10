@@ -77,6 +77,10 @@ func compressible(contentType string) bool {
 		contentType = contentType[:i]
 	}
 	contentType = strings.TrimSpace(strings.ToLower(contentType))
+	// Server-Sent Events must stream unbuffered: never compress them.
+	if contentType == "text/event-stream" {
+		return false
+	}
 	if strings.HasPrefix(contentType, "text/") {
 		return true
 	}
@@ -172,6 +176,10 @@ func (cw *writer) Flush() {
 	}
 	http.NewResponseController(cw.ResponseWriter).Flush()
 }
+
+// Unwrap exposes the wrapped writer so http.ResponseController can
+// reach its Hijack (protocol upgrades) and other optional methods.
+func (cw *writer) Unwrap() http.ResponseWriter { return cw.ResponseWriter }
 
 func newEncoder(name string, w io.Writer) io.WriteCloser {
 	switch name {

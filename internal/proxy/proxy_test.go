@@ -1,9 +1,11 @@
 package proxy
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -161,6 +163,70 @@ func TestRedirectLoopBreak(t *testing.T) {
 	p.Handler(true).ServeHTTP(rec, req)
 	if got := rec.Header().Get("Location"); got != "http://other.example/x" {
 		t.Fatalf("external redirect must not be rewritten: %q", got)
+	}
+}
+
+func TestProtocolUpgrade(t *testing.T) {
+	// A backend that speaks a trivial "echo" upgrade protocol: it
+	// hijacks the connection, sends 101, then echoes bytes. This
+	// exercises the same path as WebSocket (Connection: Upgrade +
+	// bidirectional stream after hijack).
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Upgrade") != "echo" {
+			http.Error(w, "not an upgrade", http.StatusBadRequest)
+			return
+		}
+		conn, _, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			t.Errorf("backend hijack: %v", err)
+			return
+		}
+		defer conn.Close()
+		conn.Write([]byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: echo\r\nConnection: Upgrade\r\n\r\n"))
+		io.Copy(conn, conn) // echo until the client closes
+	}))
+	defer backend.Close()
+
+	// Serve gated through a real server so the connection can be
+	// hijacked (a ResponseRecorder cannot).
+	p := newTestProxy(t, "{}\n", map[string]string{"app.yaml": vhostYAML(backend.URL, "")})
+	front := httptest.NewServer(p.Handler(false))
+	defer front.Close()
+
+	conn, err := net.Dial("tcp", strings.TrimPrefix(front.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	// Raw upgrade handshake, Host routes to the vhost.
+	fmt.Fprint(conn, "GET / HTTP/1.1\r\nHost: app.test\r\nConnection: Upgrade\r\nUpgrade: echo\r\n\r\n")
+
+	br := bufio.NewReader(conn)
+	status, err := br.ReadString('\n')
+	if err != nil || !strings.Contains(status, "101") {
+		t.Fatalf("expected 101 Switching Protocols, got %q (err %v)", status, err)
+	}
+	// Drain the rest of the response headers.
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if line == "\r\n" {
+			break
+		}
+	}
+
+	// The tunnel is open: send bytes, expect them echoed back.
+	fmt.Fprint(conn, "ping")
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(br, buf); err != nil {
+		t.Fatalf("reading echo: %v", err)
+	}
+	if string(buf) != "ping" {
+		t.Fatalf("echo mismatch: %q", buf)
 	}
 }
 

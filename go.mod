@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/andybalholm/brotli v1.2.2
-	github.com/fsnotify/fsnotify v1.9.0
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/klauspost/compress v1.19.0
 	github.com/quic-go/quic-go v0.60.0
 	gopkg.in/yaml.v3 v3.0.1

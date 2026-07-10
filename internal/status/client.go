@@ -86,6 +86,9 @@ func print(snap *Snapshot, jsonOut bool, prev *Snapshot, elapsed time.Duration) 
 		fmt.Printf("waf:      %d rules, %d active bans, %d blocked, %d banned\n",
 			snap.WAF.Rules, snap.WAF.ActiveBans, snap.WAF.Blocked, snap.WAF.Banned)
 	}
+	if snap.GeoIP != nil && snap.GeoIP.Enabled {
+		fmt.Printf("geoip:    database %s\n", boolWord(snap.GeoIP.Loaded, "loaded", "NOT loaded"))
+	}
 	if snap.Vhosts != nil {
 		for _, v := range snap.Vhosts.Items {
 			states := make([]string, 0, len(v.Backends))

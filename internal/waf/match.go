@@ -15,11 +15,14 @@ import (
 // evalCtx carries the extracted request (and, later, response status)
 // through the evaluation of a rule set.
 type evalCtx struct {
-	r        *http.Request
-	clientIP string
-	body     string
-	args     url.Values // query + parsed form, computed lazily
-	argsDone bool
+	r         *http.Request
+	clientIP  string
+	body      string
+	country   string
+	continent string
+	asn       string
+	args      url.Values // query + parsed form, computed lazily
+	argsDone  bool
 }
 
 // NewContext builds an evaluation context for one request. body is the
@@ -27,6 +30,13 @@ type evalCtx struct {
 // this, then Engine.Evaluate.
 func NewContext(r *http.Request, clientIP, body string) *evalCtx {
 	return &evalCtx{r: r, clientIP: clientIP, body: body}
+}
+
+// SetGeo attaches the GeoIP resolution of the client IP, consumed by
+// the country/continent/asn fields. Called by the proxy only when a
+// loaded rule needs it.
+func (ctx *evalCtx) SetGeo(country, continent, asn string) {
+	ctx.country, ctx.continent, ctx.asn = country, continent, asn
 }
 
 // values returns the strings a condition should test for the given
@@ -45,6 +55,12 @@ func (ctx *evalCtx) values(field Field, name string) []string {
 		return []string{ctx.body}
 	case FieldIP:
 		return []string{ctx.clientIP}
+	case FieldCountry:
+		return []string{ctx.country}
+	case FieldContinent:
+		return []string{ctx.continent}
+	case FieldASN:
+		return []string{ctx.asn}
 	case FieldHeader:
 		if name != "" {
 			return ctx.r.Header.Values(name)

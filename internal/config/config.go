@@ -52,6 +52,7 @@ type Config struct {
 	Proxy       Proxy       `yaml:"proxy"`
 	Compression Compression `yaml:"compression"`
 	Health      Health      `yaml:"health"`
+	GeoIP       GeoIP       `yaml:"geoip"`
 	WAF         WAF         `yaml:"waf"`
 	API         API         `yaml:"api"`
 
@@ -113,6 +114,15 @@ type Health struct {
 	Cooldown Duration `yaml:"cooldown"`
 }
 
+// GeoIP configures MaxMind database lookups, consumed by the WAF via
+// the country/continent/asn rule fields. Databases live at the
+// conventional Ubuntu path and are hot-swapped on refresh.
+type GeoIP struct {
+	Enabled   bool   `yaml:"enabled"`
+	CountryDB string `yaml:"country_db"`
+	ASNDB     string `yaml:"asn_db"` // optional
+}
+
 // WAF configures the web application firewall. Rules live in RulesDir
 // (one group per YAML file), hot-reloaded. Mode "block" enforces,
 // "detect" only logs matches (for tuning). Per-vhost overrides exist.
@@ -166,6 +176,11 @@ func Default() *Config {
 		Health: Health{
 			MaxFails: 3,
 			Cooldown: Duration(30 * time.Second),
+		},
+		GeoIP: GeoIP{
+			Enabled:   false,
+			CountryDB: "/usr/share/GeoIP/GeoLite2-Country.mmdb",
+			ASNDB:     "",
 		},
 		WAF: WAF{
 			Enabled:      false,
@@ -270,6 +285,10 @@ func (c *Config) validate() error {
 	}
 	if c.Health.Cooldown.Std() <= 0 {
 		return fmt.Errorf("health.cooldown must be positive")
+	}
+
+	if c.GeoIP.Enabled && c.GeoIP.CountryDB == "" {
+		return fmt.Errorf("geoip.country_db is required when geoip.enabled is true")
 	}
 
 	switch c.WAF.Mode {

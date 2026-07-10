@@ -26,6 +26,7 @@ import (
 	"github.com/ostap-mykhaylyak/gated/internal/certs"
 	"github.com/ostap-mykhaylyak/gated/internal/compress"
 	"github.com/ostap-mykhaylyak/gated/internal/config"
+	"github.com/ostap-mykhaylyak/gated/internal/geoip"
 	"github.com/ostap-mykhaylyak/gated/internal/logging"
 	"github.com/ostap-mykhaylyak/gated/internal/metrics"
 	"github.com/ostap-mykhaylyak/gated/internal/vhost"
@@ -38,6 +39,7 @@ type Proxy struct {
 	vhosts *vhost.Store
 	certs  *certs.Store
 	waf    *waf.Engine
+	geoip  *geoip.Resolver // nil when geoip is disabled
 	m      *metrics.Metrics
 	logs   *logging.Streams
 
@@ -49,13 +51,14 @@ type Proxy struct {
 // New builds the Proxy. The backend transport is created once (its
 // ResponseHeaderTimeout comes from the initial config; changing
 // backend_timeout requires a restart, unlike everything else).
-func New(cfg *config.Manager, vhosts *vhost.Store, certStore *certs.Store, wafEngine *waf.Engine, m *metrics.Metrics, logs *logging.Streams) *Proxy {
+func New(cfg *config.Manager, vhosts *vhost.Store, certStore *certs.Store, wafEngine *waf.Engine, geo *geoip.Resolver, m *metrics.Metrics, logs *logging.Streams) *Proxy {
 	c := cfg.Get()
 	return &Proxy{
 		cfg:    cfg,
 		vhosts: vhosts,
 		certs:  certStore,
 		waf:    wafEngine,
+		geoip:  geo,
 		m:      m,
 		logs:   logs,
 		transport: &http.Transport{
@@ -131,7 +134,12 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 			if p.waf.NeedsBody() {
 				body = bufferBody(r, cfg.WAF.MaxBodyBytes)
 			}
-			dec, pending := p.waf.Evaluate(waf.NewContext(r, clientIP, body), v.WAFPol)
+			wctx := waf.NewContext(r, clientIP, body)
+			if p.geoip != nil && p.waf.NeedsGeo() {
+				g := p.geoip.Lookup(clientIP)
+				wctx.SetGeo(g.Country, g.Continent, g.ASN)
+			}
+			dec, pending := p.waf.Evaluate(wctx, v.WAFPol)
 			wafPending = pending
 			if dec.Block {
 				http.Error(sw, "forbidden", dec.Status)

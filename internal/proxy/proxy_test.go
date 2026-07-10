@@ -52,7 +52,7 @@ func newTestProxy(t *testing.T, globalYAML string, vhostFiles map[string]string)
 	wafEngine.LoadAll()
 	t.Cleanup(func() { logs.Close(); store.Close(); wafEngine.Close() })
 
-	return New(mgr, store, certs.New(t.TempDir()), wafEngine, m, logs)
+	return New(mgr, store, certs.New(t.TempDir()), wafEngine, nil, m, logs)
 }
 
 func vhostYAML(backendURL string, extra string) string {
@@ -189,7 +189,7 @@ func wafProxy(t *testing.T, backendURL, wafRules string) http.Handler {
 	wafEngine.LoadAll()
 	t.Cleanup(func() { logs.Close(); store.Close(); wafEngine.Close() })
 
-	return New(mgr, store, certs.New(t.TempDir()), wafEngine, m, logs).Handler(true)
+	return New(mgr, store, certs.New(t.TempDir()), wafEngine, nil, m, logs).Handler(true)
 }
 
 func TestWAFBlocksThroughProxy(t *testing.T) {

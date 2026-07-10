@@ -393,6 +393,65 @@ rules:
 	}
 }
 
+func TestSessionField(t *testing.T) {
+	// WooCommerce add-to-cart requires a prior visit.
+	e := newEngine(t, map[string]string{"x.yaml": `
+rules:
+  - id: "wc-add-to-cart-session"
+    msg: "add-to-cart without session"
+    action: block
+    match:
+      - field: query
+        operator: contains
+        patterns: ["add-to-cart="]
+      - field: session
+        operator: eq
+        patterns: ["none"]
+`})
+	if !e.NeedsSession() {
+		t.Fatal("engine must report it needs the session field")
+	}
+
+	// Direct add-to-cart with no session: blocked.
+	ctx := NewContext(req("GET", "/?add-to-cart=99"), "1.2.3.4", "")
+	ctx.SetSession(false)
+	if dec, _ := e.Evaluate(ctx, block); !dec.Block {
+		t.Fatal("add-to-cart without a prior visit must be blocked")
+	}
+
+	// Same request with a valid visit: passes.
+	ctx = NewContext(req("GET", "/?add-to-cart=99"), "1.2.3.4", "")
+	ctx.SetSession(true)
+	if dec, _ := e.Evaluate(ctx, block); dec.Block {
+		t.Fatal("add-to-cart with a prior visit must pass")
+	}
+
+	// A normal page load (no add-to-cart) is never affected.
+	ctx = NewContext(req("GET", "/shop"), "1.2.3.4", "")
+	ctx.SetSession(false)
+	if dec, _ := e.Evaluate(ctx, block); dec.Block {
+		t.Fatal("normal navigation must not be blocked")
+	}
+}
+
+func TestSessionFailsOpenWhenUnresolved(t *testing.T) {
+	// If the session field is never resolved (subsystem inactive), the
+	// "none" rule must not fire — fail open, don't block everything.
+	e := newEngine(t, map[string]string{"x.yaml": `
+rules:
+  - id: "needs-session"
+    action: block
+    match:
+      - field: session
+        operator: eq
+        patterns: ["none"]
+`})
+	ctx := NewContext(req("GET", "/?add-to-cart=1"), "1.2.3.4", "") // SetSession not called
+	if dec, _ := e.Evaluate(ctx, block); dec.Block {
+		t.Fatal("unresolved session must fail open (not block)")
+	}
+}
+
 func TestShippedExampleRulesLoad(t *testing.T) {
 	// The rules shipped in skel must always compile against the engine.
 	src := filepath.Join("..", "bootstrap", "skel", "etc", "gated", "waf")

@@ -32,6 +32,12 @@ const (
 	RunDir = "/run/gated"
 	Socket = RunDir + "/gated.sock"
 
+	// Secret files: persistent HMAC keys for challenge clearances and
+	// session cookies, generated on first run under the writable state
+	// dir (LogDir) so signed cookies survive restarts.
+	ChallengeSecretFile = LogDir + "/challenge.secret"
+	SessionSecretFile   = LogDir + "/session.secret"
+
 	// LetsEncryptDir is the conventional certbot live directory used
 	// for automatic certificate lookup (overridable in config.yaml).
 	LetsEncryptDir = "/etc/letsencrypt/live"

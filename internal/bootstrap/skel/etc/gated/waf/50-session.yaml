@@ -1,0 +1,45 @@
+# gated WAF - prior-visit (session) protection.
+#
+# gated sets a signed "visit" cookie when a browser loads a normal HTML
+# page. These rules require that cookie on sensitive endpoints, so they
+# cannot be called directly by scripts that never rendered a page — a
+# common database-flood pattern (e.g. hammering add-to-cart).
+#
+# The session field is "valid" when the visit cookie is present and
+# valid, "none" otherwise. If a rule uses it, gated automatically
+# issues and checks the visit cookie (see the session section in
+# config.yaml). Disabled by default.
+
+group: session
+description: Require a prior visit before sensitive endpoints.
+enabled: false
+
+rules:
+  # WooCommerce add-to-cart called directly, without having loaded a
+  # page first: block it. Both conditions must hold (AND).
+  - id: "wc-add-to-cart-session"
+    msg: "add-to-cart without a prior session"
+    severity: medium
+    action: block
+    status: 403
+    match:
+      - field: query
+        operator: contains
+        patterns: ["add-to-cart="]
+      - field: session
+        operator: eq
+        patterns: ["none"]
+
+  # AJAX/store endpoints hit without a session: challenge instead of
+  # hard-blocking, so a real (but cookieless) browser can still recover.
+  - id: "wc-ajax-session"
+    msg: "store endpoint without a prior session"
+    action: challenge
+    match:
+      - field: path
+        operator: rx
+        transform: [lowercase]
+        patterns: ['^/\?wc-ajax=', '^/wp-json/wc/store/']
+      - field: session
+        operator: eq
+        patterns: ["none"]

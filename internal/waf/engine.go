@@ -30,12 +30,13 @@ func (p Policy) excluded(id string) bool { return p.Exclude[id] }
 // compiledSet is the immutable, ready-to-run rule set, split by role
 // so the hot path iterates only what it must.
 type compiledSet struct {
-	allow    []*Rule // whitelist, checked first
-	request  []*Rule // enforced at request time
-	status   []*Rule // counted at response time (track.on_status)
-	needBody bool
-	needGeo  bool
-	count    int
+	allow       []*Rule // whitelist, checked first
+	request     []*Rule // enforced at request time
+	status      []*Rule // counted at response time (track.on_status)
+	needBody    bool
+	needGeo     bool
+	needSession bool
+	count       int
 }
 
 // Engine evaluates requests against the loaded rules. Rules are
@@ -64,6 +65,11 @@ func (e *Engine) NeedsBody() bool { return e.set.Load().needBody }
 // NeedsGeo reports whether any loaded rule inspects a GeoIP field, so
 // the proxy only performs the lookup when it pays off.
 func (e *Engine) NeedsGeo() bool { return e.set.Load().needGeo }
+
+// NeedsSession reports whether any loaded rule inspects the session
+// field, so the proxy only resolves and issues the visit marker when a
+// rule actually uses it.
+func (e *Engine) NeedsSession() bool { return e.set.Load().needSession }
 
 // Count returns the number of loaded (enabled) rules.
 func (e *Engine) Count() int { return e.set.Load().count }
@@ -122,6 +128,9 @@ func (cs *compiledSet) add(ru *Rule) {
 	}
 	if ru.needsGeo() {
 		cs.needGeo = true
+	}
+	if ru.needsSession() {
+		cs.needSession = true
 	}
 	switch {
 	case ru.Action == ActionAllow:

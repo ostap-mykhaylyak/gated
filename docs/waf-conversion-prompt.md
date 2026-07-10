@@ -65,6 +65,15 @@ rules:
 | `country` | paese dell'IP (ISO alpha-2, es. `CN`) | `GEO:COUNTRY_CODE` |
 | `continent` | continente dell'IP (es. `AS`, `EU`) | `GEO:CONTINENT_CODE` |
 | `asn` | ASN dell'IP (es. `AS15169`) | — |
+| `session` | `valid` se c'è un cookie di visita precedente, `none` altrimenti | — |
+
+> Il field `session` verifica che il client abbia già caricato una
+> pagina HTML del sito (gated emette un cookie di visita firmato) prima
+> di chiamare un endpoint sensibile: utile contro i flood diretti (es.
+> `add-to-cart` di WooCommerce senza navigazione). Tipico: `field:
+> query contains add-to-cart=` **AND** `field: session eq none` →
+> `block`/`challenge`. Non esprimibile nelle fonti classiche: è una
+> protezione propria di gated.
 
 > I field GeoIP (`country`/`continent`/`asn`) richiedono `geoip.enabled:
 > true` in `config.yaml` con un database MaxMind valido. Senza database

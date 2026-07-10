@@ -21,6 +21,7 @@ type evalCtx struct {
 	country   string
 	continent string
 	asn       string
+	session   string     // "valid" | "none" | "" (session field not resolved)
 	args      url.Values // query + parsed form, computed lazily
 	argsDone  bool
 }
@@ -37,6 +38,18 @@ func NewContext(r *http.Request, clientIP, body string) *evalCtx {
 // loaded rule needs it.
 func (ctx *evalCtx) SetGeo(country, continent, asn string) {
 	ctx.country, ctx.continent, ctx.asn = country, continent, asn
+}
+
+// SetSession records whether the request carries a valid prior-visit
+// marker, consumed by the session field. Called by the proxy only when
+// a loaded rule needs it; left unset (empty) it never matches, so the
+// protection fails open when the session subsystem is inactive.
+func (ctx *evalCtx) SetSession(valid bool) {
+	if valid {
+		ctx.session = "valid"
+	} else {
+		ctx.session = "none"
+	}
 }
 
 // values returns the strings a condition should test for the given
@@ -61,6 +74,8 @@ func (ctx *evalCtx) values(field Field, name string) []string {
 		return []string{ctx.continent}
 	case FieldASN:
 		return []string{ctx.asn}
+	case FieldSession:
+		return []string{ctx.session}
 	case FieldHeader:
 		if name != "" {
 			return ctx.r.Header.Values(name)

@@ -26,6 +26,8 @@ import (
 	"github.com/ostap-mykhaylyak/gated/internal/pages"
 	"github.com/ostap-mykhaylyak/gated/internal/paths"
 	"github.com/ostap-mykhaylyak/gated/internal/proxy"
+	"github.com/ostap-mykhaylyak/gated/internal/secret"
+	"github.com/ostap-mykhaylyak/gated/internal/session"
 	"github.com/ostap-mykhaylyak/gated/internal/status"
 	"github.com/ostap-mykhaylyak/gated/internal/vhost"
 	"github.com/ostap-mykhaylyak/gated/internal/waf"
@@ -122,9 +124,23 @@ func runDaemon(cfgPath string) error {
 	}
 	defer wafEngine.Close()
 
-	// Browser-challenge manager and the styled error/challenge pages.
-	chal := challenge.NewManager(mgr.Get().Challenge.Secret,
+	// Persistent HMAC keys: a configured secret wins, otherwise a random
+	// key is generated once under LogDir so clearance/visit cookies
+	// survive restarts (production-hardened default).
+	chalSecret, err := secret.LoadOrCreate(mgr.Get().Challenge.Secret, paths.ChallengeSecretFile)
+	if err != nil {
+		return err
+	}
+	sessSecret, err := secret.LoadOrCreate(mgr.Get().Session.Secret, paths.SessionSecretFile)
+	if err != nil {
+		return err
+	}
+
+	// Browser-challenge manager, prior-visit session marker, and the
+	// styled error/challenge pages.
+	chal := challenge.NewManager(chalSecret,
 		mgr.Get().Challenge.Difficulty, mgr.Get().Challenge.ClearanceTTL.Std())
+	sess := session.NewManager(sessSecret, mgr.Get().Session.TTL.Std())
 	pg, err := pages.New(mgr.Get().Pages.Dir)
 	if err != nil {
 		return err
@@ -161,7 +177,7 @@ func runDaemon(cfgPath string) error {
 	}
 
 	// Public entrypoints: :80, :443 TCP (h1+h2), :443 UDP (h3).
-	prx := proxy.New(mgr, vhosts, certStore, wafEngine, geo, chal, pg, m, logs)
+	prx := proxy.New(mgr, vhosts, certStore, wafEngine, geo, chal, sess, pg, m, logs)
 	srv := proxy.NewServer(prx)
 	if err := srv.Start(); err != nil {
 		return err

@@ -9,8 +9,10 @@
 package vhost
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -32,11 +34,26 @@ type TLSConf struct {
 	KeyFile  string `yaml:"key_file"`
 }
 
-// BackendConf is one upstream in the vhost file.
+// BackendConf is one upstream in the vhost file. URL carries the full
+// address: scheme (http/https), any IP or hostname, and any port —
+// e.g. "http://192.168.1.50:8080" or "https://10.0.0.5:443".
 type BackendConf struct {
 	URL    string `yaml:"url"`
 	Weight int    `yaml:"weight"`
 	Backup bool   `yaml:"backup"`
+}
+
+// BackendTLS tunes the TLS handshake gated performs toward HTTPS
+// backends. It only matters when a backend URL uses https://.
+type BackendTLS struct {
+	// ServerName overrides the SNI / certificate-verification name.
+	// Needed when the backend is addressed by IP but presents a cert
+	// for a hostname (e.g. the public host). Empty = use the backend
+	// URL host.
+	ServerName string `yaml:"server_name"`
+	// InsecureSkipVerify accepts self-signed or mismatched backend
+	// certificates (use only on a trusted private network).
+	InsecureSkipVerify bool `yaml:"insecure_skip_verify"`
 }
 
 // Sticky configures cookie-based session affinity.
@@ -97,15 +114,17 @@ type VHost struct {
 	RedirectToHTTPS bool          `yaml:"redirect_to_https"`
 	EarlyHints      []string      `yaml:"early_hints"`
 	Backends        []BackendConf `yaml:"backends"`
+	BackendTLS      BackendTLS    `yaml:"backend_tls"`
 	LoadBalancing   LB            `yaml:"load_balancing"`
 	Compression     Compression   `yaml:"compression"`
 	WAF             WAFOverride   `yaml:"waf"`
 
 	// Resolved at load time, not part of the YAML.
-	Name   string            `yaml:"-"` // file base name without extension
-	Comp   compress.Settings `yaml:"-"` // global defaults + overrides
-	WAFPol waf.Policy        `yaml:"-"` // global WAF + overrides
-	Pool   *balancer.Pool    `yaml:"-"`
+	Name      string            `yaml:"-"` // file base name without extension
+	Comp      compress.Settings `yaml:"-"` // global defaults + overrides
+	WAFPol    waf.Policy        `yaml:"-"` // global WAF + overrides
+	Pool      *balancer.Pool    `yaml:"-"`
+	Transport *http.Transport   `yaml:"-"` // backend transport (per-vhost TLS)
 }
 
 // defaults returns a VHost pre-filled with production defaults; the
@@ -167,7 +186,43 @@ func loadFile(path string, cfg *config.Config, prev *VHost) (*VHost, error) {
 		return nil, err
 	}
 	v.Pool = pool
+
+	// Reuse the previous transport when the TLS settings are unchanged,
+	// to preserve backend keep-alive connections across reloads.
+	if prev != nil && prev.Transport != nil && prev.BackendTLS == v.BackendTLS {
+		v.Transport = prev.Transport
+	} else {
+		v.Transport = buildTransport(cfg, v.BackendTLS)
+	}
 	return v, nil
+}
+
+// buildTransport creates the backend transport for a vhost, applying
+// the per-vhost TLS settings for HTTPS upstreams.
+func buildTransport(cfg *config.Config, btls BackendTLS) *http.Transport {
+	tr := &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:          512,
+		MaxIdleConnsPerHost:   64,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: time.Second,
+		ResponseHeaderTimeout: cfg.Proxy.BackendTimeout.Std(),
+		// Backends' encodings pass through untouched; gated does its own
+		// compression on the client side.
+		DisableCompression: true,
+	}
+	if btls.ServerName != "" || btls.InsecureSkipVerify {
+		tr.TLSClientConfig = &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			ServerName:         btls.ServerName,
+			InsecureSkipVerify: btls.InsecureSkipVerify,
+		}
+	}
+	return tr
 }
 
 func (v *VHost) validate() error {

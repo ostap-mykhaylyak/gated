@@ -101,6 +101,33 @@ func TestProxyEndToEnd(t *testing.T) {
 	}
 }
 
+func TestHTTPSBackend(t *testing.T) {
+	// A TLS backend with a self-signed cert on its own :443-style port.
+	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Proto", "https-backend")
+		io.WriteString(w, "secure backend")
+	}))
+	defer backend.Close()
+
+	// backend_tls.insecure_skip_verify lets gated accept the self-signed
+	// cert; the backend URL is https:// (not 127.0.0.1:80).
+	vh := "hosts: [\"app.test\"]\nredirect_to_https: false\n" +
+		"backend_tls:\n  insecure_skip_verify: true\n" +
+		"backends:\n  - url: \"" + backend.URL + "\"\n"
+	p := newTestProxy(t, "{}\n", map[string]string{"app.yaml": vh})
+
+	req := httptest.NewRequest("GET", "http://app.test/", nil)
+	req.Host = "app.test"
+	rec := httptest.NewRecorder()
+	p.Handler(false).ServeHTTP(rec, req)
+	if rec.Code != 200 || rec.Body.String() != "secure backend" {
+		t.Fatalf("https backend proxy failed: %d %q", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("X-Proto") != "https-backend" {
+		t.Fatal("response did not come from the TLS backend")
+	}
+}
+
 func TestUnknownHost404(t *testing.T) {
 	p := newTestProxy(t, "{}\n", nil)
 	req := httptest.NewRequest("GET", "http://nobody.test/", nil)

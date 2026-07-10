@@ -266,7 +266,7 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 				}
 			}
 
-			err, wrote := p.forward(cw, r, b, clientIP, secure, issueVisit)
+			err, wrote := p.forward(cw, r, b, clientIP, secure, issueVisit, v.Transport)
 			v.Pool.Report(b, err == nil)
 			if err == nil {
 				return
@@ -329,7 +329,7 @@ func newRequestID() string {
 // forward proxies the request to one backend. Returns the transport
 // error (nil on success) and whether anything was written to the
 // client (which forbids retrying).
-func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, b *balancer.Backend, clientIP string, secure, issueVisit bool) (error, bool) {
+func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, b *balancer.Backend, clientIP string, secure, issueVisit bool, transport http.RoundTripper) (error, bool) {
 	b.Acquire()
 	defer b.Release()
 
@@ -340,7 +340,7 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, b *balancer.Back
 		scheme = "https"
 	}
 	rp := &httputil.ReverseProxy{
-		Transport: p.transport,
+		Transport: transport,
 		ModifyResponse: func(resp *http.Response) error {
 			// Mark the browser as "visited" on a successful HTML page,
 			// so a session-protected endpoint later sees the cookie.

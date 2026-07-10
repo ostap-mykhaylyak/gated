@@ -12,6 +12,9 @@ point of the server, in front of any service.
 - Reverse proxy + load balancing (round_robin, least_conn, ip_hash,
   uri_hash, random; per-backend `backup`; sticky sessions; passive +
   active health checks). Backend health state survives config reloads.
+  Backends (in each vhost file) take a full `url` — any IP/host, any
+  port, `http://` or `https://`; per-vhost `backend_tls` sets the SNI /
+  cert name and can accept self-signed backend certs.
 - TLS/HTTPS, HTTP/2, HTTP/3 (QUIC, advertised via Alt-Svc), Early
   Hints (103)
 - Compression: zstd, brotli, gzip (negotiated, per-vhost overridable)

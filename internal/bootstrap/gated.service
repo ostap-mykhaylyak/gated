@@ -30,7 +30,8 @@ ReadWritePaths=/var/log/gated
 # If you enable the management API (api.enabled: true), it writes vhost
 # files: add the vhosts dir to the writable set.
 #ReadWritePaths=/var/log/gated /etc/gated/vhosts
-# The WAF reads /etc/gated/waf read-only; no extra path needed for it.
+# The WAF reads /etc/gated/waf and the /etc/gated/{allow,deny} access
+# lists read-only; no extra writable path needed for them.
 # The challenge/session HMAC keys are auto-generated under /var/log/gated
 # (already writable above), so clearance/visit cookies survive restarts.
 ProtectHome=true

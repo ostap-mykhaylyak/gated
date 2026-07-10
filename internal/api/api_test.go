@@ -46,7 +46,7 @@ func newFixture(t *testing.T) *fixture {
 	store.LoadAll(mgr.Get())
 	t.Cleanup(store.Close)
 
-	wafEngine := waf.New(t.TempDir(), discard, metrics.New())
+	wafEngine := waf.New(t.TempDir(), "", "", discard, metrics.New())
 	wafEngine.LoadAll()
 	t.Cleanup(wafEngine.Close)
 	collect := status.NewCollector("test", mgr, store, wafEngine, nil, metrics.New(), t.TempDir())

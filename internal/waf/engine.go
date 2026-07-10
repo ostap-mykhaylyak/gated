@@ -3,6 +3,7 @@ package waf
 import (
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -39,32 +40,57 @@ type compiledSet struct {
 	count       int
 }
 
-// Engine evaluates requests against the loaded rules. Rules are
-// hot-reloaded from a directory (one group per YAML file).
+// Engine evaluates requests against the loaded rules and the folder-
+// based IP/ASN access lists, all hot-reloaded from their directories.
 type Engine struct {
-	dir   string
-	log   *slog.Logger
-	m     *metrics.Metrics
-	state *stateStore
+	dir      string
+	allowDir string
+	denyDir  string
+	log      *slog.Logger
+	m        *metrics.Metrics
+	state    *stateStore
 
-	set atomic.Pointer[compiledSet]
-	mu  sync.Mutex // serializes LoadAll
+	set    atomic.Pointer[compiledSet]
+	access atomic.Pointer[accessSet]
+	mu     sync.Mutex // serializes LoadAll / LoadAccess
 }
 
-// New returns an Engine reading rules from dir.
-func New(dir string, log *slog.Logger, m *metrics.Metrics) *Engine {
-	e := &Engine{dir: dir, log: log, m: m, state: newStateStore()}
+// New returns an Engine reading YAML rules from dir and IP/ASN access
+// lists from allowDir (whitelist) and denyDir (blacklist). The list
+// directories may be "" to disable that feature.
+func New(dir, allowDir, denyDir string, log *slog.Logger, m *metrics.Metrics) *Engine {
+	e := &Engine{dir: dir, allowDir: allowDir, denyDir: denyDir, log: log, m: m, state: newStateStore()}
 	e.set.Store(&compiledSet{})
+	e.access.Store(newAccessSet())
 	return e
+}
+
+// LoadAccess (re)reads the allow/deny directories and swaps the access
+// set atomically.
+func (e *Engine) LoadAccess() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	a := loadAccess(e.allowDir, e.denyDir, e.log)
+	e.access.Store(a)
+	e.log.Info("waf access lists loaded",
+		"allow_ips", a.allowIP.len(), "deny_ips", a.denyIP.len(),
+		"allow_asn", len(a.allowASN), "deny_asn", len(a.denyASN))
+}
+
+// AccessCounts returns the sizes of the loaded access lists.
+func (e *Engine) AccessCounts() (allowIP, denyIP, allowASN, denyASN int) {
+	a := e.access.Load()
+	return a.allowIP.len(), a.denyIP.len(), len(a.allowASN), len(a.denyASN)
 }
 
 // NeedsBody reports whether any loaded rule inspects the request body,
 // so the proxy only buffers bodies when it pays off.
 func (e *Engine) NeedsBody() bool { return e.set.Load().needBody }
 
-// NeedsGeo reports whether any loaded rule inspects a GeoIP field, so
-// the proxy only performs the lookup when it pays off.
-func (e *Engine) NeedsGeo() bool { return e.set.Load().needGeo }
+// NeedsGeo reports whether any loaded rule inspects a GeoIP field, or
+// any ASN access list is populated, so the proxy resolves the client's
+// geo/ASN only when it pays off.
+func (e *Engine) NeedsGeo() bool { return e.set.Load().needGeo || e.access.Load().needASN() }
 
 // NeedsSession reports whether any loaded rule inspects the session
 // field, so the proxy only resolves and issues the visit marker when a
@@ -161,7 +187,17 @@ func (e *Engine) Evaluate(ctx *evalCtx, policy Policy) (Decision, []*Rule) {
 		return Decision{}, nil
 	}
 	cs := e.set.Load()
+	acc := e.access.Load()
 	e.m.WAFInspect()
+
+	addr, _ := netip.ParseAddr(ctx.clientIP)
+	asn, hasASN := parseASN(ctx.asn)
+
+	// Access-list whitelist wins over EVERYTHING (bans, blacklist,
+	// rules): an explicitly allowed client is never filtered.
+	if acc.allowed(addr, asn, hasASN) {
+		return Decision{}, nil
+	}
 
 	// Banned client: block up front, cheapest possible path.
 	if e.state.banned(ctx.clientIP) {
@@ -171,7 +207,15 @@ func (e *Engine) Evaluate(ctx *evalCtx, policy Policy) (Decision, []*Rule) {
 		return Decision{Block: true, Status: 403, RuleID: "@ban", Msg: "client temporarily banned"}, nil
 	}
 
-	// Whitelist wins over everything else.
+	// Access-list blacklist: block outright.
+	if acc.denied(addr, asn, hasASN) {
+		e.m.WAFBlock()
+		e.log.Info("waf block", "reason", "blacklist", "ip", ctx.clientIP,
+			"asn", ctx.asn, "method", ctx.r.Method, "path", ctx.r.URL.Path)
+		return Decision{Block: true, Status: 403, RuleID: "@blacklist", Msg: "client blocked by access list"}, nil
+	}
+
+	// Whitelist rules (from the YAML rule set) win over the rest.
 	for _, ru := range cs.allow {
 		if policy.excluded(ru.ID) {
 			continue
@@ -242,8 +286,9 @@ func (e *Engine) ObserveResponse(pending []*Rule, clientIP string, status int) {
 	}
 }
 
-// Watch reloads the rule directory on any *.yaml/*.yml change,
-// coalescing bursts into one reload.
+// Watch reloads the rule directory (*.yaml/*.yml) and the access-list
+// directories (*.ips/*.asn) on change, coalescing bursts into a single
+// reload of whichever changed.
 func (e *Engine) Watch(stop <-chan struct{}) error {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -253,9 +298,19 @@ func (e *Engine) Watch(stop <-chan struct{}) error {
 		w.Close()
 		return fmt.Errorf("waf watch: %w", err)
 	}
+	// The list directories are optional; watch them only if present.
+	for _, d := range []string{e.allowDir, e.denyDir} {
+		if d == "" {
+			continue
+		}
+		if _, statErr := os.Stat(d); statErr == nil {
+			w.Add(d)
+		}
+	}
 	go func() {
 		defer w.Close()
 		var pending <-chan time.Time
+		var rulesDirty, accessDirty bool
 		for {
 			select {
 			case <-stop:
@@ -264,8 +319,12 @@ func (e *Engine) Watch(stop <-chan struct{}) error {
 				if !ok {
 					return
 				}
-				name := strings.ToLower(ev.Name)
-				if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
+				switch strings.ToLower(filepath.Ext(ev.Name)) {
+				case ".yaml", ".yml":
+					rulesDirty = true
+				case ".ips", ".asn":
+					accessDirty = true
+				default:
 					continue
 				}
 				pending = time.After(200 * time.Millisecond)
@@ -276,7 +335,14 @@ func (e *Engine) Watch(stop <-chan struct{}) error {
 				e.log.Error("waf watch error", "error", err)
 			case <-pending:
 				pending = nil
-				e.LoadAll()
+				if rulesDirty {
+					e.LoadAll()
+					rulesDirty = false
+				}
+				if accessDirty {
+					e.LoadAccess()
+					accessDirty = false
+				}
 			}
 		}
 	}()

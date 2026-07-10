@@ -1,0 +1,11 @@
+# gated access list - BLACKLIST by ASN (Autonomous System Number).
+#
+# One ASN per line, as "AS14061" or "14061". Blank lines and text
+# after '#' are ignored. Requires geoip.enabled with an ASN database
+# (geoip.asn_db). Blacklisting an ASN blocks ALL of that network's
+# addresses — handy to cut off an abusive hosting/VPN provider.
+#
+# Examples (commented out):
+# AS14061   # DigitalOcean
+# AS16509   # Amazon AWS
+# AS9009    # M247 (common VPN exit ranges)

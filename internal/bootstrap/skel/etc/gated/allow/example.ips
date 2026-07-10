@@ -1,0 +1,13 @@
+# gated access list - WHITELIST by IP / CIDR.
+#
+# One entry per line: a single IP (v4 or v6) or a CIDR range. Blank
+# lines and text after '#' are ignored. Drop as many *.ips files in
+# this directory as you like (e.g. office.ips, monitoring.ips).
+#
+# A whitelisted client BYPASSES the WAF entirely — it is never blocked
+# by a ban, the blacklist, or any rule. Files are hot-reloaded.
+#
+# Examples (commented out — nothing is whitelisted by default):
+# 203.0.113.7
+# 198.51.100.0/24
+# 2001:db8:abcd::/48

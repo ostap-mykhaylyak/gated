@@ -86,6 +86,8 @@ func print(snap *Snapshot, jsonOut bool, prev *Snapshot, elapsed time.Duration) 
 		fmt.Printf("waf:      %d rules, %d active bans, %d blocked, %d banned, %d challenged, %d cleared\n",
 			snap.WAF.Rules, snap.WAF.ActiveBans, snap.WAF.Blocked, snap.WAF.Banned,
 			snap.WAF.Challenged, snap.WAF.Cleared)
+		fmt.Printf("access:   allow %d ips / %d asn, deny %d ips / %d asn\n",
+			snap.WAF.AllowIPs, snap.WAF.AllowASN, snap.WAF.DenyIPs, snap.WAF.DenyASN)
 	}
 	if snap.GeoIP != nil && snap.GeoIP.Enabled {
 		fmt.Printf("geoip:    database %s\n", boolWord(snap.GeoIP.Loaded, "loaded", "NOT loaded"))

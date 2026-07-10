@@ -117,8 +117,9 @@ func runDaemon(cfgPath string) error {
 
 	// WAF engine (rules hot-reloaded from their directory). Loaded
 	// before the vhosts, whose policies reference it.
-	wafEngine := waf.New(mgr.Get().WAF.RulesDir, logs.WAF, m)
+	wafEngine := waf.New(mgr.Get().WAF.RulesDir, mgr.Get().WAF.AllowDir, mgr.Get().WAF.DenyDir, logs.WAF, m)
 	wafEngine.LoadAll()
+	wafEngine.LoadAccess()
 	if err := wafEngine.Watch(stop); err != nil {
 		return err
 	}

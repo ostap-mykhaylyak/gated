@@ -31,6 +31,11 @@ point of the server, in front of any service.
   bidirectionally, compression bypassed); Server-Sent Events stream
   unbuffered
 - Compression: zstd, brotli, gzip (negotiated, per-vhost overridable)
+- In-memory **response cache** (per-vhost, shared byte-bounded LRU):
+  honors backend `Cache-Control`, optional fallback/micro-TTL for HTML
+  (spike shield), bypass by cookie prefix (logged-in/cart) or
+  `Authorization`, never caches `Set-Cookie`/`Vary: Cookie`; `X-Cache:
+  HIT/MISS`. Stores uncompressed and re-encodes per client.
 - Per-vhost header rewriting (add/set/remove on requests and responses,
   e.g. security headers like HSTS/X-Frame-Options; strip `Server`) and
   CORS (allowed origins/methods/headers, credentials, preflight)

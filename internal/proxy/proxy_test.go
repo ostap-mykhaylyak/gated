@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ostap-mykhaylyak/gated/internal/cache"
 	"github.com/ostap-mykhaylyak/gated/internal/certs"
 	"github.com/ostap-mykhaylyak/gated/internal/challenge"
 	"github.com/ostap-mykhaylyak/gated/internal/config"
@@ -64,7 +65,7 @@ func newTestProxy(t *testing.T, globalYAML string, vhostFiles map[string]string)
 	}
 	chal := challenge.NewManager("test-secret", 0, time.Minute)
 	sess := session.NewManager("test-session-secret", time.Hour)
-	return New(mgr, store, certs.New(t.TempDir()), wafEngine, nil, chal, sess, pg, m, logs)
+	return New(mgr, store, certs.New(t.TempDir()), wafEngine, nil, chal, sess, pg, cache.New(64<<20), m, logs)
 }
 
 func vhostYAML(backendURL string, extra string) string {
@@ -414,6 +415,82 @@ func TestCanarySplit(t *testing.T) {
 	}
 }
 
+func TestResponseCache(t *testing.T) {
+	var backendHits int
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendHits++
+		w.Header().Set("Content-Type", "text/html")
+		w.Header().Set("Cache-Control", "max-age=60")
+		io.WriteString(w, "page-body")
+	}))
+	defer backend.Close()
+
+	vh := "hosts: [\"app.test\"]\nredirect_to_https: false\n" +
+		"cache:\n  enabled: true\n  bypass_cookies: [\"wordpress_logged_in_\"]\n" +
+		"backends:\n  - url: \"" + backend.URL + "\"\n"
+	p := newTestProxy(t, "{}\n", map[string]string{"app.yaml": vh})
+
+	req := func(cookie string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", "http://app.test/page", nil)
+		r.Host = "app.test"
+		if cookie != "" {
+			r.Header.Set("Cookie", cookie)
+		}
+		rec := httptest.NewRecorder()
+		p.Handler(false).ServeHTTP(rec, r)
+		return rec
+	}
+
+	// First request: MISS, reaches backend and caches.
+	r1 := req("")
+	if r1.Body.String() != "page-body" || r1.Header().Get("X-Cache") != "MISS" {
+		t.Fatalf("first request: %q X-Cache=%q", r1.Body.String(), r1.Header().Get("X-Cache"))
+	}
+	// Second identical request: HIT, backend not touched again.
+	r2 := req("")
+	if r2.Header().Get("X-Cache") != "HIT" || r2.Body.String() != "page-body" {
+		t.Fatalf("second request must be a HIT: %q %q", r2.Header().Get("X-Cache"), r2.Body.String())
+	}
+	if backendHits != 1 {
+		t.Fatalf("backend should be hit once, got %d", backendHits)
+	}
+
+	// A logged-in user (bypass cookie) skips the cache and reaches backend.
+	r3 := req("wordpress_logged_in_abc=1")
+	if r3.Header().Get("X-Cache") == "HIT" {
+		t.Fatal("a bypass-cookie request must not be served from cache")
+	}
+	if backendHits != 2 {
+		t.Fatalf("bypass request should reach backend, hits=%d", backendHits)
+	}
+}
+
+func TestCacheNotStoredForSetCookie(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Header().Set("Cache-Control", "max-age=60")
+		w.Header().Set("Set-Cookie", "sid=xyz") // user-specific -> never cache
+		io.WriteString(w, "body")
+	}))
+	defer backend.Close()
+
+	vh := "hosts: [\"app.test\"]\nredirect_to_https: false\ncache:\n  enabled: true\n" +
+		"backends:\n  - url: \"" + backend.URL + "\"\n"
+	p := newTestProxy(t, "{}\n", map[string]string{"app.yaml": vh})
+
+	do := func() string {
+		r := httptest.NewRequest("GET", "http://app.test/p", nil)
+		r.Host = "app.test"
+		rec := httptest.NewRecorder()
+		p.Handler(false).ServeHTTP(rec, r)
+		return rec.Header().Get("X-Cache")
+	}
+	do()
+	if do() == "HIT" {
+		t.Fatal("responses with Set-Cookie must never be cached")
+	}
+}
+
 func TestHTTP2Backend(t *testing.T) {
 	// The backend speaks HTTP/2 over TLS; gated (backend_protocol auto)
 	// must negotiate h2 end-to-end via ALPN, not fall back to h1.
@@ -543,7 +620,7 @@ func wafProxy(t *testing.T, backendURL, wafRules string) http.Handler {
 	pg, _ := pages.New("")
 	chal := challenge.NewManager("test-secret", 0, time.Minute)
 	sess := session.NewManager("test-session-secret", time.Hour)
-	return New(mgr, store, certs.New(t.TempDir()), wafEngine, nil, chal, sess, pg, m, logs).Handler(true)
+	return New(mgr, store, certs.New(t.TempDir()), wafEngine, nil, chal, sess, pg, cache.New(64<<20), m, logs).Handler(true)
 }
 
 func TestWAFBlocksThroughProxy(t *testing.T) {

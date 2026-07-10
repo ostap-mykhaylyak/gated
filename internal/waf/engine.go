@@ -171,12 +171,13 @@ func (cs *compiledSet) add(ru *Rule) {
 // Decision is the outcome of evaluating a request. Block wins over
 // Challenge when both would apply.
 type Decision struct {
-	Block     bool
-	Challenge bool
-	Status    int
-	RuleID    string
-	Msg       string
-	Severity  Severity
+	Block      bool
+	Challenge  bool
+	Status     int
+	RuleID     string
+	Msg        string
+	Severity   Severity
+	RetryAfter time.Duration // set for rate-limit 429s
 }
 
 // Evaluate runs the request-phase rules for one request. It returns the
@@ -232,6 +233,23 @@ func (e *Engine) Evaluate(ctx *evalCtx, policy Policy) (Decision, []*Rule) {
 		if policy.excluded(ru.ID) || !ru.eval(ctx) {
 			continue
 		}
+
+		// Rate-limit rules pace the client (429) instead of blocking:
+		// under the limit the request just proceeds.
+		if ru.RateLimit != nil {
+			ok, retry := e.state.allow(ru.ID, ctx.clientIP, ru.RateLimit)
+			if ok {
+				continue
+			}
+			e.log.Info("waf match", "rule", ru.ID, "action", "rate_limit", "ip", ctx.clientIP,
+				"method", ctx.r.Method, "path", ctx.r.URL.Path, "msg", ru.Msg, "enforced", !policy.Detect)
+			if policy.Detect {
+				continue
+			}
+			e.m.WAFBlock()
+			return Decision{Block: true, Status: 429, RuleID: ru.ID, Msg: ru.Msg, Severity: ru.Severity, RetryAfter: retry}, nil
+		}
+
 		bannedNow := false
 		if ru.Track != nil {
 			bannedNow = e.state.hit(ru.ID, ctx.clientIP, ru.Track)

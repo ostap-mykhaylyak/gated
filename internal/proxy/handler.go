@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -175,12 +176,21 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 			wafPending = pending
 			if dec.Block {
 				p.m.WAFBlock()
-				p.logs.WAF.Info("waf enforce", "ray_id", reqID, "action", "block",
+				action := "block"
+				title := "Request Blocked"
+				message := "This request was blocked by the security rules. If you believe this is an error, contact the site administrator."
+				if dec.Status == http.StatusTooManyRequests {
+					action, title = "rate_limit", "Too Many Requests"
+					message = "You are sending requests too quickly. Please slow down and try again shortly."
+					if dec.RetryAfter > 0 {
+						sw.Header().Set("Retry-After", strconv.Itoa(int(dec.RetryAfter.Seconds())+1))
+					}
+				}
+				p.logs.WAF.Info("waf enforce", "ray_id", reqID, "action", action,
 					"rule", dec.RuleID, "ip", clientIP, "host", host, "path", r.URL.Path)
 				p.pages.Message(sw, pages.MessageData{
-					Code: dec.Status, Title: "Request Blocked",
-					Message: "This request was blocked by the security rules. If you believe this is an error, contact the site administrator.",
-					Host:    host, RequestID: reqID,
+					Code: dec.Status, Title: title,
+					Message: message, Host: host, RequestID: reqID,
 				})
 				return
 			}

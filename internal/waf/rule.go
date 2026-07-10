@@ -106,6 +106,16 @@ type Track struct {
 	OnStatus  []int           `yaml:"on_status"`
 }
 
+// RateLimit turns a rule into a token-bucket rate limiter, per client
+// IP: up to Requests are allowed per Per window (bursting up to Burst),
+// excess requests get 429 with Retry-After. Unlike a ban, it does not
+// lock the client out — it just paces them.
+type RateLimit struct {
+	Requests int             `yaml:"requests"`
+	Per      config.Duration `yaml:"per"`
+	Burst    int             `yaml:"burst"` // bucket capacity; default = Requests
+}
+
 // Condition is one matchable clause.
 type Condition struct {
 	Field     Field    `yaml:"field"`
@@ -124,14 +134,15 @@ type Condition struct {
 
 // Rule is one WAF rule.
 type Rule struct {
-	ID       string      `yaml:"id"`
-	Msg      string      `yaml:"msg"`
-	Severity Severity    `yaml:"severity"`
-	Action   Action      `yaml:"action"`
-	Status   int         `yaml:"status"` // for block; default 403
-	Match    []Condition `yaml:"match"`
-	Track    *Track      `yaml:"track"`
-	Tags     []string    `yaml:"tags"`
+	ID        string      `yaml:"id"`
+	Msg       string      `yaml:"msg"`
+	Severity  Severity    `yaml:"severity"`
+	Action    Action      `yaml:"action"`
+	Status    int         `yaml:"status"` // for block; default 403
+	Match     []Condition `yaml:"match"`
+	Track     *Track      `yaml:"track"`
+	RateLimit *RateLimit  `yaml:"rate_limit"`
+	Tags      []string    `yaml:"tags"`
 }
 
 // File is one rule group (one YAML file).
@@ -185,7 +196,9 @@ func (r *Rule) compile() error {
 	if strings.TrimSpace(r.ID) == "" {
 		return fmt.Errorf("rule id is required")
 	}
-	if !knownActions[r.Action] {
+	// A rate-limit rule enforces 429 on excess by itself: the action is
+	// optional (and defaults to that). Any other rule needs a valid one.
+	if !(r.RateLimit != nil && r.Action == "") && !knownActions[r.Action] {
 		return fmt.Errorf("rule %s: unknown action %q", r.ID, r.Action)
 	}
 	if len(r.Match) == 0 {
@@ -193,6 +206,17 @@ func (r *Rule) compile() error {
 	}
 	if r.Action == ActionBan && r.Track == nil {
 		return fmt.Errorf("rule %s: action ban requires a track section", r.ID)
+	}
+	if r.RateLimit != nil {
+		if r.RateLimit.Requests < 1 {
+			return fmt.Errorf("rule %s: rate_limit.requests must be >= 1", r.ID)
+		}
+		if r.RateLimit.Per.Std() <= 0 {
+			return fmt.Errorf("rule %s: rate_limit.per must be positive", r.ID)
+		}
+		if r.RateLimit.Burst < 1 {
+			r.RateLimit.Burst = r.RateLimit.Requests
+		}
 	}
 	if r.Track != nil {
 		if r.Track.Threshold < 1 {

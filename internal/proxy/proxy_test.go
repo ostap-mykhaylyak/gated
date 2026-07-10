@@ -432,6 +432,43 @@ rules:
 	}
 }
 
+func TestRateLimitThroughProxy(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "ok")
+	}))
+	defer backend.Close()
+
+	h := wafProxy(t, backend.URL, `
+rules:
+  - id: "rl"
+    match:
+      - field: path
+        operator: eq
+        patterns: ["/login"]
+    rate_limit:
+      requests: 2
+      per: 1m
+      burst: 2
+`)
+	get := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", "https://app.test/login", nil)
+		req.Host = "app.test"
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	if get().Code != 200 || get().Code != 200 {
+		t.Fatal("first two requests must pass")
+	}
+	rec := get()
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("third request must be 429, got %d", rec.Code)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Fatal("429 response must carry Retry-After")
+	}
+}
+
 func TestWAFBodyBlockThroughProxy(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Prove the body is still intact for the backend after WAF buffering.

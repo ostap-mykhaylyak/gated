@@ -1,0 +1,140 @@
+# gated WAF - WordPress hardening (starter set).
+#
+# Disabled by default: review, then flip enabled to true. These rules
+# assume the WAF is enabled for the vhost (waf.enabled). Some use the
+# `session` field (needs the session subsystem) and rate limiting.
+#
+# Tune the paths/limits to your install before enabling in block mode;
+# start with waf.mode: detect to watch what would trigger.
+
+group: wordpress
+description: WordPress-specific protections (edit before enabling).
+enabled: false
+
+rules:
+  # --- Brute force / abuse rate limiting -------------------------------
+
+  # wp-login.php: at most 10 attempts/minute per IP (429 beyond).
+  - id: "wp-login-ratelimit"
+    msg: "wp-login rate limit"
+    severity: medium
+    match:
+      - field: path
+        operator: eq
+        patterns: ["/wp-login.php"]
+    rate_limit:
+      requests: 10
+      per: 1m
+      burst: 5
+
+  # REST API: pace anonymous hammering of /wp-json.
+  - id: "wp-json-ratelimit"
+    msg: "wp-json rate limit"
+    match:
+      - field: path
+        operator: prefix
+        patterns: ["/wp-json/"]
+    rate_limit:
+      requests: 60
+      per: 1m
+
+  # --- XML-RPC abuse (payload inspection) ------------------------------
+
+  # Block the classic pingback DoS/SSRF: it is only visible inside the
+  # POST body, so this inspects the request payload (field: body).
+  - id: "wp-xmlrpc-pingback"
+    msg: "XML-RPC pingback abuse"
+    severity: high
+    action: block
+    status: 403
+    match:
+      - field: path
+        operator: eq
+        patterns: ["/xmlrpc.php"]
+      - field: body
+        operator: contains
+        transform: [lowercase]
+        patterns: ["pingback.ping", "system.multicall"]
+
+  # Or ban an IP that keeps hammering xmlrpc regardless of method.
+  - id: "wp-xmlrpc-flood"
+    msg: "XML-RPC flood"
+    action: ban
+    match:
+      - field: path
+        operator: eq
+        patterns: ["/xmlrpc.php"]
+    track:
+      threshold: 30
+      window: 1m
+      ban_time: 1h
+
+  # --- Enumeration & recon --------------------------------------------
+
+  # User/author enumeration via ?author=N or the REST users endpoint.
+  - id: "wp-user-enumeration"
+    msg: "User enumeration attempt"
+    severity: medium
+    action: block
+    match:
+      - field: uri
+        operator: rx
+        transform: [lowercase]
+        patterns: ['[?&]author=\d+', '/wp-json/wp/v2/users']
+
+  # Direct access to sensitive files.
+  - id: "wp-sensitive-files"
+    msg: "Access to sensitive WordPress file"
+    severity: high
+    action: block
+    match:
+      - field: path
+        operator: rx
+        transform: [lowercase]
+        patterns:
+          - '/wp-config\.php'
+          - '/\.user\.ini$'
+          - '/wp-content/debug\.log$'
+          - '/readme\.html$'
+          - '/wp-admin/install\.php$'
+
+  # --- Malicious payloads (body inspection) ---------------------------
+
+  # PHP code or webshell markers inside a POST body — inspects payload.
+  - id: "wp-php-in-body"
+    msg: "PHP code in request body"
+    severity: critical
+    action: block
+    match:
+      - field: body
+        operator: rx
+        transform: [lowercase, urldecode]
+        patterns:
+          - '<\?php'
+          - 'base64_decode\s*\('
+          - 'eval\s*\('
+          - 'system\s*\('
+          - 'move_uploaded_file\s*\('
+
+  # Requests for a PHP file under uploads (dropped webshell).
+  - id: "wp-php-in-uploads"
+    msg: "PHP execution under uploads"
+    severity: critical
+    action: block
+    match:
+      - field: path
+        operator: rx
+        transform: [lowercase]
+        patterns: ['/wp-content/uploads/.*\.php']
+
+  # --- Bad bots --------------------------------------------------------
+
+  - id: "wp-bad-scanners"
+    msg: "Known WordPress scanner"
+    severity: low
+    action: block
+    match:
+      - field: header
+        name: User-Agent
+        operator: pm
+        patterns: ["wpscan", "WPScan", "nikto", "sqlmap", "fimap"]

@@ -18,6 +18,7 @@ import (
 	"github.com/ostap-mykhaylyak/gated/internal/logging"
 	"github.com/ostap-mykhaylyak/gated/internal/metrics"
 	"github.com/ostap-mykhaylyak/gated/internal/pages"
+	"github.com/ostap-mykhaylyak/gated/internal/session"
 	"github.com/ostap-mykhaylyak/gated/internal/vhost"
 	"github.com/ostap-mykhaylyak/gated/internal/waf"
 )
@@ -60,7 +61,8 @@ func newTestProxy(t *testing.T, globalYAML string, vhostFiles map[string]string)
 		t.Fatal(err)
 	}
 	chal := challenge.NewManager("test-secret", 0, time.Minute)
-	return New(mgr, store, certs.New(t.TempDir()), wafEngine, nil, chal, pg, m, logs)
+	sess := session.NewManager("test-session-secret", time.Hour)
+	return New(mgr, store, certs.New(t.TempDir()), wafEngine, nil, chal, sess, pg, m, logs)
 }
 
 func vhostYAML(backendURL string, extra string) string {
@@ -199,7 +201,8 @@ func wafProxy(t *testing.T, backendURL, wafRules string) http.Handler {
 
 	pg, _ := pages.New("")
 	chal := challenge.NewManager("test-secret", 0, time.Minute)
-	return New(mgr, store, certs.New(t.TempDir()), wafEngine, nil, chal, pg, m, logs).Handler(true)
+	sess := session.NewManager("test-session-secret", time.Hour)
+	return New(mgr, store, certs.New(t.TempDir()), wafEngine, nil, chal, sess, pg, m, logs).Handler(true)
 }
 
 func TestWAFBlocksThroughProxy(t *testing.T) {
@@ -364,6 +367,65 @@ func extractToken(t *testing.T, body string) string {
 	start := strings.IndexByte(rest, '"')
 	end := strings.IndexByte(rest[start+1:], '"')
 	return rest[start+1 : start+1+end]
+}
+
+func TestSessionGateThroughProxy(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.RawQuery, "add-to-cart") {
+			io.WriteString(w, "added")
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		io.WriteString(w, "<html>shop</html>")
+	}))
+	defer backend.Close()
+
+	h := wafProxy(t, backend.URL, `
+rules:
+  - id: "wc-add-to-cart-session"
+    action: block
+    match:
+      - field: query
+        operator: contains
+        patterns: ["add-to-cart="]
+      - field: session
+        operator: eq
+        patterns: ["none"]
+`)
+
+	// 1. Direct add-to-cart with no prior visit: blocked (403).
+	req := httptest.NewRequest("GET", "https://shop.test/?add-to-cart=42", nil)
+	req.Host = "app.test"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("direct add-to-cart must be blocked, got %d", rec.Code)
+	}
+
+	// 2. Visit a normal HTML page: gated issues the visit cookie.
+	visit := httptest.NewRequest("GET", "https://app.test/shop", nil)
+	visit.Host = "app.test"
+	vRec := httptest.NewRecorder()
+	h.ServeHTTP(vRec, visit)
+	var visitCookie *http.Cookie
+	for _, ck := range vRec.Result().Cookies() {
+		if ck.Name == "gated_visit" {
+			visitCookie = ck
+		}
+	}
+	if visitCookie == nil {
+		t.Fatal("visit cookie not issued on HTML page load")
+	}
+
+	// 3. add-to-cart WITH the visit cookie: allowed through.
+	req2 := httptest.NewRequest("GET", "https://app.test/?add-to-cart=42", nil)
+	req2.Host = "app.test"
+	req2.AddCookie(visitCookie)
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, req2)
+	if rec2.Code != 200 || rec2.Body.String() != "added" {
+		t.Fatalf("add-to-cart with prior visit must pass: %d %q", rec2.Code, rec2.Body.String())
+	}
 }
 
 func TestCompressionApplied(t *testing.T) {

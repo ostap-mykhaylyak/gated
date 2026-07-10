@@ -73,9 +73,26 @@ waf:
 challenge:
   # Browser-challenge action ("Checking your browser" interstitial).
   # The clearance cookie is HMAC-signed and bound to the client IP.
-  secret: ""                    # HMAC key; empty = random per start (clearances reset on restart)
-  difficulty: 0                 # SHA-256 proof-of-work leading zero bits; 0 = JS challenge only
+  #
+  # secret: leave empty for a persistent key auto-generated on first
+  # run at /var/log/gated/challenge.secret (survives restarts). Set it
+  # explicitly only to share clearances across multiple gated hosts.
+  secret: ""
+  # difficulty: SHA-256 proof-of-work leading zero bits. Higher = more
+  # client cost (slows floods) but more latency; the PoW runs via
+  # SubtleCrypto and therefore needs HTTPS (gated redirects to HTTPS
+  # before challenging). 0 = JS challenge only (works everywhere).
+  # 4 is a light production default; raise toward 12-16 under attack.
+  difficulty: 4
   clearance_ttl: 30m            # how long a passed challenge lasts
+
+session:
+  # Prior-visit marker used by the WAF `session` field. gated sets a
+  # signed visit cookie on HTML page loads; rules can then require it
+  # on sensitive endpoints (see waf/50-session.yaml). The key is
+  # auto-generated and persisted like challenge.secret.
+  secret: ""
+  ttl: 2h                       # how long a visit marker stays valid
 
 pages:
   # Styled error/challenge pages. Built-in templates are used unless

@@ -34,6 +34,7 @@ import (
 	"github.com/ostap-mykhaylyak/gated/internal/logging"
 	"github.com/ostap-mykhaylyak/gated/internal/metrics"
 	"github.com/ostap-mykhaylyak/gated/internal/pages"
+	"github.com/ostap-mykhaylyak/gated/internal/session"
 	"github.com/ostap-mykhaylyak/gated/internal/vhost"
 	"github.com/ostap-mykhaylyak/gated/internal/waf"
 )
@@ -49,6 +50,7 @@ type Proxy struct {
 	waf       *waf.Engine
 	geoip     *geoip.Resolver // nil when geoip is disabled
 	challenge *challenge.Manager
+	session   *session.Manager
 	pages     *pages.Pages
 	m         *metrics.Metrics
 	logs      *logging.Streams
@@ -61,7 +63,7 @@ type Proxy struct {
 // New builds the Proxy. The backend transport is created once (its
 // ResponseHeaderTimeout comes from the initial config; changing
 // backend_timeout requires a restart, unlike everything else).
-func New(cfg *config.Manager, vhosts *vhost.Store, certStore *certs.Store, wafEngine *waf.Engine, geo *geoip.Resolver, chal *challenge.Manager, pg *pages.Pages, m *metrics.Metrics, logs *logging.Streams) *Proxy {
+func New(cfg *config.Manager, vhosts *vhost.Store, certStore *certs.Store, wafEngine *waf.Engine, geo *geoip.Resolver, chal *challenge.Manager, sess *session.Manager, pg *pages.Pages, m *metrics.Metrics, logs *logging.Streams) *Proxy {
 	c := cfg.Get()
 	return &Proxy{
 		cfg:       cfg,
@@ -70,6 +72,7 @@ func New(cfg *config.Manager, vhosts *vhost.Store, certStore *certs.Store, wafEn
 		waf:       wafEngine,
 		geoip:     geo,
 		challenge: chal,
+		session:   sess,
 		pages:     pg,
 		m:         m,
 		logs:      logs,
@@ -165,6 +168,9 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 				g := p.geoip.Lookup(clientIP)
 				wctx.SetGeo(g.Country, g.Continent, g.ASN)
 			}
+			if p.session != nil && p.waf.NeedsSession() {
+				wctx.SetSession(p.session.Valid(r))
+			}
 			dec, pending := p.waf.Evaluate(wctx, v.WAFPol)
 			wafPending = pending
 			if dec.Block {
@@ -218,6 +224,12 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 			sw.WriteHeader(http.StatusEarlyHints)
 		}
 
+		// Issue the prior-visit marker on normal HTML page loads, so a
+		// later request to a session-protected endpoint carries it. Only
+		// when a loaded rule actually uses the session field.
+		issueVisit := v.WAFPol.Enabled && p.session != nil && p.waf.NeedsSession() &&
+			r.Method == http.MethodGet && !p.session.Valid(r)
+
 		cw, finish := compress.Wrap(sw, r, v.Comp)
 		defer finish()
 
@@ -254,7 +266,7 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 				}
 			}
 
-			err, wrote := p.forward(cw, r, b, clientIP, secure)
+			err, wrote := p.forward(cw, r, b, clientIP, secure, issueVisit)
 			v.Pool.Report(b, err == nil)
 			if err == nil {
 				return
@@ -317,7 +329,7 @@ func newRequestID() string {
 // forward proxies the request to one backend. Returns the transport
 // error (nil on success) and whether anything was written to the
 // client (which forbids retrying).
-func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, b *balancer.Backend, clientIP string, secure bool) (error, bool) {
+func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, b *balancer.Backend, clientIP string, secure, issueVisit bool) (error, bool) {
 	b.Acquire()
 	defer b.Release()
 
@@ -329,6 +341,15 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, b *balancer.Back
 	}
 	rp := &httputil.ReverseProxy{
 		Transport: p.transport,
+		ModifyResponse: func(resp *http.Response) error {
+			// Mark the browser as "visited" on a successful HTML page,
+			// so a session-protected endpoint later sees the cookie.
+			if issueVisit && resp.StatusCode >= 200 && resp.StatusCode < 300 &&
+				strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html") {
+				resp.Header.Add("Set-Cookie", p.session.Cookie(secure).String())
+			}
+			return nil
+		},
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(b.URL)
 			pr.Out.Host = r.Host // preserve the original Host header

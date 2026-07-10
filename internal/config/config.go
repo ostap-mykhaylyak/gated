@@ -55,6 +55,7 @@ type Config struct {
 	GeoIP       GeoIP       `yaml:"geoip"`
 	WAF         WAF         `yaml:"waf"`
 	Challenge   Challenge   `yaml:"challenge"`
+	Session     Session     `yaml:"session"`
 	Pages       Pages       `yaml:"pages"`
 	API         API         `yaml:"api"`
 
@@ -144,6 +145,14 @@ type Challenge struct {
 	ClearanceTTL Duration `yaml:"clearance_ttl"` // how long a passed challenge lasts
 }
 
+// Session configures the "prior visit" marker used by the WAF session
+// field. gated sets a signed visit cookie on HTML page loads; a rule
+// can then require it on sensitive endpoints.
+type Session struct {
+	Secret string   `yaml:"secret"` // HMAC key; empty = persistent key file
+	TTL    Duration `yaml:"ttl"`    // how long a visit marker is valid
+}
+
 // Pages configures the styled error/challenge pages. Built-in
 // templates are used unless an override file exists in Dir.
 type Pages struct {
@@ -207,8 +216,12 @@ func Default() *Config {
 		},
 		Challenge: Challenge{
 			Secret:       "",
-			Difficulty:   0,
+			Difficulty:   4,
 			ClearanceTTL: Duration(30 * time.Minute),
+		},
+		Session: Session{
+			Secret: "",
+			TTL:    Duration(2 * time.Hour),
 		},
 		Pages: Pages{
 			Dir: paths.PagesDir,
@@ -327,6 +340,9 @@ func (c *Config) validate() error {
 	}
 	if c.Challenge.ClearanceTTL.Std() <= 0 {
 		return fmt.Errorf("challenge.clearance_ttl must be positive")
+	}
+	if c.Session.TTL.Std() <= 0 {
+		return fmt.Errorf("session.ttl must be positive")
 	}
 	if c.WAF.Enabled && c.WAF.RulesDir == "" {
 		return fmt.Errorf("waf.rules_dir is required when waf.enabled is true")

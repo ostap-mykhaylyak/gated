@@ -36,6 +36,12 @@ point of the server, in front of any service.
   "Checking your browser" interstitial that must run JS (and optionally
   solve a SHA-256 proof of work) to earn a signed, IP-bound clearance
   cookie — e.g. challenge a whole country instead of hard-blocking it.
+  Signing keys are persisted (auto-generated), so clearances survive
+  restarts.
+- **Prior-visit / session gate** (`session` field): gated sets a signed
+  visit cookie on HTML page loads; a rule can require it on sensitive
+  endpoints, so e.g. WooCommerce `add-to-cart` can't be called directly
+  without a prior visit — stops direct database-flood patterns.
 - **Styled pages** for blocked requests, browser challenge, 404,
   backend-down (502/503), each with a Ray ID for log correlation;
   built-in templates overridable from `/etc/gated/pages/`.

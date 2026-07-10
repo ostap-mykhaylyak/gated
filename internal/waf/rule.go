@@ -38,12 +38,16 @@ const (
 	FieldCountry   Field = "country"   // ISO 3166-1 alpha-2, e.g. "CN"
 	FieldContinent Field = "continent" // e.g. "AS"
 	FieldASN       Field = "asn"       // e.g. "AS15169"
+
+	// FieldSession is "valid" when the request carries a valid prior-
+	// visit cookie, "none" otherwise.
+	FieldSession Field = "session"
 )
 
 var knownFields = map[Field]bool{
 	FieldMethod: true, FieldPath: true, FieldQuery: true, FieldURI: true,
 	FieldHeader: true, FieldCookie: true, FieldArg: true, FieldBody: true, FieldIP: true,
-	FieldCountry: true, FieldContinent: true, FieldASN: true,
+	FieldCountry: true, FieldContinent: true, FieldASN: true, FieldSession: true,
 }
 
 func (f Field) isGeo() bool {
@@ -160,6 +164,16 @@ func (r *Rule) needsBody() bool {
 func (r *Rule) needsGeo() bool {
 	for _, c := range r.Match {
 		if c.Field.isGeo() {
+			return true
+		}
+	}
+	return false
+}
+
+// needsSession reports whether any condition inspects the session field.
+func (r *Rule) needsSession() bool {
+	for _, c := range r.Match {
+		if c.Field == FieldSession {
 			return true
 		}
 	}

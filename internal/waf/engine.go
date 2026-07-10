@@ -34,6 +34,7 @@ type compiledSet struct {
 	request  []*Rule // enforced at request time
 	status   []*Rule // counted at response time (track.on_status)
 	needBody bool
+	needGeo  bool
 	count    int
 }
 
@@ -59,6 +60,10 @@ func New(dir string, log *slog.Logger, m *metrics.Metrics) *Engine {
 // NeedsBody reports whether any loaded rule inspects the request body,
 // so the proxy only buffers bodies when it pays off.
 func (e *Engine) NeedsBody() bool { return e.set.Load().needBody }
+
+// NeedsGeo reports whether any loaded rule inspects a GeoIP field, so
+// the proxy only performs the lookup when it pays off.
+func (e *Engine) NeedsGeo() bool { return e.set.Load().needGeo }
 
 // Count returns the number of loaded (enabled) rules.
 func (e *Engine) Count() int { return e.set.Load().count }
@@ -114,6 +119,9 @@ func (cs *compiledSet) add(ru *Rule) {
 	cs.count++
 	if ru.needsBody() {
 		cs.needBody = true
+	}
+	if ru.needsGeo() {
+		cs.needGeo = true
 	}
 	switch {
 	case ru.Action == ActionAllow:

@@ -263,6 +263,67 @@ rules:
 	}
 }
 
+func TestGeoIPCountryBlock(t *testing.T) {
+	e := newEngine(t, map[string]string{"geo.yaml": `
+rules:
+  - id: "geo-block-cn"
+    msg: "Blocked country"
+    action: block
+    status: 403
+    match:
+      - field: country
+        operator: eq
+        patterns: ["CN", "RU"]
+`})
+	if !e.NeedsGeo() {
+		t.Fatal("engine must report it needs geo resolution")
+	}
+
+	// Client resolved to CN: blocked.
+	ctx := NewContext(req("GET", "/"), "1.2.3.4", "")
+	ctx.SetGeo("CN", "AS", "AS4134")
+	if dec, _ := e.Evaluate(ctx, block); !dec.Block || dec.Status != 403 {
+		t.Fatalf("CN client must be blocked: %+v", dec)
+	}
+
+	// Client resolved to IT: passes.
+	ctx = NewContext(req("GET", "/"), "5.6.7.8", "")
+	ctx.SetGeo("IT", "EU", "AS3269")
+	if dec, _ := e.Evaluate(ctx, block); dec.Block {
+		t.Fatal("IT client must pass")
+	}
+
+	// Unknown country (no geo set / db miss): the eq rule does not match.
+	ctx = NewContext(req("GET", "/"), "9.9.9.9", "")
+	if dec, _ := e.Evaluate(ctx, block); dec.Block {
+		t.Fatal("unknown country must not match an eq rule")
+	}
+}
+
+func TestGeoIPAllowlistNegate(t *testing.T) {
+	// "block every country NOT in the allowlist" via negate.
+	e := newEngine(t, map[string]string{"geo.yaml": `
+rules:
+  - id: "geo-allow-only"
+    action: block
+    match:
+      - field: country
+        operator: eq
+        negate: true
+        patterns: ["IT", "US"]
+`})
+	ctx := NewContext(req("GET", "/"), "1.1.1.1", "")
+	ctx.SetGeo("IT", "EU", "")
+	if dec, _ := e.Evaluate(ctx, block); dec.Block {
+		t.Fatal("allowlisted country must pass")
+	}
+	ctx = NewContext(req("GET", "/"), "1.1.1.1", "")
+	ctx.SetGeo("CN", "AS", "")
+	if dec, _ := e.Evaluate(ctx, block); !dec.Block {
+		t.Fatal("non-allowlisted country must be blocked")
+	}
+}
+
 func TestShippedExampleRulesLoad(t *testing.T) {
 	// The rules shipped in skel must always compile against the engine.
 	src := filepath.Join("..", "bootstrap", "skel", "etc", "gated", "waf")

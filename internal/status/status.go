@@ -24,6 +24,12 @@ type WAFProvider interface {
 	ActiveBans() int
 }
 
+// GeoIPProvider is the subset of the GeoIP resolver the status
+// collector needs. May be nil (geoip disabled).
+type GeoIPProvider interface {
+	Loaded() bool
+}
+
 // Check statuses, ordered by severity. Exit codes follow the Nagios
 // convention: 0 OK, 1 WARNING, 2 CRITICAL, 3 UNKNOWN.
 const (
@@ -76,6 +82,12 @@ type WAFSection struct {
 	Banned     int64 `json:"banned"`
 }
 
+// GeoIPSection describes the GeoIP resolver state.
+type GeoIPSection struct {
+	Enabled bool `json:"enabled"`
+	Loaded  bool `json:"loaded"`
+}
+
 // Snapshot is the full status document served over the socket.
 // Field names are stable across versions.
 type Snapshot struct {
@@ -85,6 +97,7 @@ type Snapshot struct {
 	Config    ConfigInfo        `json:"config"`
 	Vhosts    *VhostsSection    `json:"vhosts,omitempty"` // only when the daemon answered
 	WAF       *WAFSection       `json:"waf,omitempty"`    // only when the daemon answered
+	GeoIP     *GeoIPSection     `json:"geoip,omitempty"`  // only when the daemon answered
 	Checks    []Check           `json:"checks"`
 	Live      *metrics.Snapshot `json:"live,omitempty"` // only when the daemon answered
 	Timestamp time.Time         `json:"timestamp"`
@@ -121,7 +134,7 @@ func worst(checks []Check) string {
 // NewCollector builds the snapshot function the daemon serves on the
 // socket. It computes the checks at request time from state the daemon
 // already holds.
-func NewCollector(version string, mgr *config.Manager, vhosts *vhost.Store, wafEngine WAFProvider, m *metrics.Metrics, logDir string) func() *Snapshot {
+func NewCollector(version string, mgr *config.Manager, vhosts *vhost.Store, wafEngine WAFProvider, geo GeoIPProvider, m *metrics.Metrics, logDir string) func() *Snapshot {
 	start := time.Now()
 	return func() *Snapshot {
 		cfg := mgr.Get()
@@ -165,6 +178,16 @@ func NewCollector(version string, mgr *config.Manager, vhosts *vhost.Store, wafE
 			ActiveBans: wafEngine.ActiveBans(),
 			Blocked:    live.WAFBlocked,
 			Banned:     live.WAFBanned,
+		}
+
+		if cfg.GeoIP.Enabled {
+			loaded := geo != nil && geo.Loaded()
+			snap.GeoIP = &GeoIPSection{Enabled: true, Loaded: loaded}
+			if !loaded {
+				checks = append(checks, Check{"geoip", Warn, "enabled but database not loaded"})
+			} else {
+				checks = append(checks, Check{"geoip", OK, "database loaded"})
+			}
 		}
 
 		items := vhosts.Snapshot()

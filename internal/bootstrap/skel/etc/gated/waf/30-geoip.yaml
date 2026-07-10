@@ -1,0 +1,53 @@
+# gated WAF - GeoIP country/continent/ASN rules.
+#
+# Requires geoip.enabled: true in config.yaml (with a valid
+# country_db). The country/continent/asn fields resolve the real
+# client IP; without the database they never match, so these rules are
+# inert until GeoIP is set up.
+#
+# This whole file is DISABLED by default (enabled: false): flip it to
+# true — and edit the country list — to actually enforce.
+
+group: geoip
+description: Country/continent access control (edit before enabling).
+enabled: false
+
+rules:
+  # Block specific countries outright (ISO 3166-1 alpha-2 codes).
+  - id: "geo-block-country"
+    msg: "Blocked country"
+    severity: medium
+    action: block
+    status: 403
+    match:
+      - field: country
+        operator: eq
+        patterns: ["CN", "RU", "KP"]
+
+  # Alternative: allowlist a set of countries and block the rest. To
+  # use this instead, remove geo-block-country above and enable this:
+  # a request whose country is NOT in the list matches (negate) and is
+  # blocked. An empty country (unknown IP / db miss) also matches, so
+  # only enable this when the database is reliably present.
+  #- id: "geo-allow-only"
+  #  msg: "Country not allowed"
+  #  action: block
+  #  status: 403
+  #  match:
+  #    - field: country
+  #      operator: eq
+  #      negate: true
+  #      patterns: ["IT", "US", "DE", "FR"]
+
+  # Ban abusive ASNs (hosting/VPN networks) after repeated probes.
+  #- id: "geo-ban-asn"
+  #  msg: "Abusive ASN"
+  #  action: ban
+  #  match:
+  #    - field: asn
+  #      operator: eq
+  #      patterns: ["AS14061", "AS16509"]
+  #  track:
+  #    threshold: 10
+  #    window: 5m
+  #    ban_time: 2h

@@ -29,6 +29,9 @@ point of the server, in front of any service.
   and fail2ban-style stateful IP bans (`block` vs `detect` mode, global
   and per-vhost). Convert Coraza/ModSecurity, Nuclei and fail2ban rules
   with [docs/waf-conversion-prompt.md](docs/waf-conversion-prompt.md).
+- **GeoIP** (MaxMind `.mmdb` from the conventional `/usr/share/GeoIP/`,
+  hot-swapped on refresh): the WAF `country`/`continent`/`asn` fields
+  let you block or ban by geography, e.g. deny traffic from a country.
 - Optional management REST API (vhosts as REST resources, versioned
   writes with rollback)
 

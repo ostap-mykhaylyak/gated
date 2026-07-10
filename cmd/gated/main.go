@@ -19,6 +19,7 @@ import (
 	"github.com/ostap-mykhaylyak/gated/internal/bootstrap"
 	"github.com/ostap-mykhaylyak/gated/internal/certs"
 	"github.com/ostap-mykhaylyak/gated/internal/config"
+	"github.com/ostap-mykhaylyak/gated/internal/geoip"
 	"github.com/ostap-mykhaylyak/gated/internal/logging"
 	"github.com/ostap-mykhaylyak/gated/internal/metrics"
 	"github.com/ostap-mykhaylyak/gated/internal/paths"
@@ -98,6 +99,18 @@ func runDaemon(cfgPath string) error {
 	// Certificate cache (conventional Let's Encrypt layout).
 	certStore := certs.New(mgr.Get().TLS.LetsEncryptDir)
 
+	// GeoIP resolver (nil when disabled). Consumed by the WAF via the
+	// country/continent/asn rule fields; hot-swapped on db refresh.
+	var geo *geoip.Resolver
+	if gc := mgr.Get().GeoIP; gc.Enabled {
+		geo = geoip.New(gc.CountryDB, gc.ASNDB, logs.Service)
+		geo.Watch(stop)
+		defer geo.Close()
+		if !geo.Loaded() {
+			logs.Service.Warn("geoip enabled but country database not loaded", "path", gc.CountryDB)
+		}
+	}
+
 	// WAF engine (rules hot-reloaded from their directory). Loaded
 	// before the vhosts, whose policies reference it.
 	wafEngine := waf.New(mgr.Get().WAF.RulesDir, logs.WAF, m)
@@ -131,14 +144,14 @@ func runDaemon(cfgPath string) error {
 
 	// Local status socket: the IPC channel behind --status. If it
 	// fails the daemon still serves; --status will report not running.
-	collect := status.NewCollector(version, mgr, vhosts, wafEngine, m, paths.LogDir)
+	collect := status.NewCollector(version, mgr, vhosts, wafEngine, geo, m, paths.LogDir)
 	statusSrv, err := status.Serve(paths.Socket, collect)
 	if err != nil {
 		logs.Service.Error("status socket unavailable", "error", err)
 	}
 
 	// Public entrypoints: :80, :443 TCP (h1+h2), :443 UDP (h3).
-	prx := proxy.New(mgr, vhosts, certStore, wafEngine, m, logs)
+	prx := proxy.New(mgr, vhosts, certStore, wafEngine, geo, m, logs)
 	srv := proxy.NewServer(prx)
 	if err := srv.Start(); err != nil {
 		return err

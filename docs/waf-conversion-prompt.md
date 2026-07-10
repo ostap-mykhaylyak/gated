@@ -62,6 +62,16 @@ rules:
 | `arg`    | args GET + form POST (`name` = quale) | `ARGS`, `ARGS_GET`, `ARGS_POST`, `ARGS:X` |
 | `body`   | corpo richiesta (fino a `max_body_bytes`) | `REQUEST_BODY` |
 | `ip`     | IP reale del client | `REMOTE_ADDR` |
+| `country` | paese dell'IP (ISO alpha-2, es. `CN`) | `GEO:COUNTRY_CODE` |
+| `continent` | continente dell'IP (es. `AS`, `EU`) | `GEO:CONTINENT_CODE` |
+| `asn` | ASN dell'IP (es. `AS15169`) | — |
+
+> I field GeoIP (`country`/`continent`/`asn`) richiedono `geoip.enabled:
+> true` in `config.yaml` con un database MaxMind valido. Senza database
+> restano vuoti e le relative regole non scattano mai. Corrispondono al
+> plugin `@geoLookup`/`GEO:` di ModSecurity; una regola fail2ban che
+> banna per paese si converte in `field: country` + `action: block`
+> (o `ban` con `track`).
 
 > Nota: `gated` **non** ha ancora `ARGS_NAMES`, `REQUEST_COOKIES_NAMES`,
 > né l'ispezione del corpo/headers di **risposta** (a parte lo status

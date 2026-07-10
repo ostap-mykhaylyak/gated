@@ -33,11 +33,21 @@ const (
 	FieldArg    Field = "arg"    // ARGS[:name] (query + form)
 	FieldBody   Field = "body"   // REQUEST_BODY (up to max_body_bytes)
 	FieldIP     Field = "ip"     // REMOTE_ADDR (resolved real IP)
+
+	// GeoIP fields (resolved from the client IP; require geoip.enabled).
+	FieldCountry   Field = "country"   // ISO 3166-1 alpha-2, e.g. "CN"
+	FieldContinent Field = "continent" // e.g. "AS"
+	FieldASN       Field = "asn"       // e.g. "AS15169"
 )
 
 var knownFields = map[Field]bool{
 	FieldMethod: true, FieldPath: true, FieldQuery: true, FieldURI: true,
 	FieldHeader: true, FieldCookie: true, FieldArg: true, FieldBody: true, FieldIP: true,
+	FieldCountry: true, FieldContinent: true, FieldASN: true,
+}
+
+func (f Field) isGeo() bool {
+	return f == FieldCountry || f == FieldContinent || f == FieldASN
 }
 
 // Operator is the comparison applied to each extracted value.
@@ -139,6 +149,16 @@ func (r *Rule) blockStatus() int {
 func (r *Rule) needsBody() bool {
 	for _, c := range r.Match {
 		if c.Field == FieldBody {
+			return true
+		}
+	}
+	return false
+}
+
+// needsGeo reports whether any condition inspects a GeoIP field.
+func (r *Rule) needsGeo() bool {
+	for _, c := range r.Match {
+		if c.Field.isGeo() {
 			return true
 		}
 	}

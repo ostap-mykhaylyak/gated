@@ -257,6 +257,34 @@ func TestHTTPSBackend(t *testing.T) {
 	}
 }
 
+func TestHTTP2Backend(t *testing.T) {
+	// The backend speaks HTTP/2 over TLS; gated (backend_protocol auto)
+	// must negotiate h2 end-to-end via ALPN, not fall back to h1.
+	backend := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Backend-Proto", r.Proto)
+		io.WriteString(w, "ok")
+	}))
+	backend.EnableHTTP2 = true
+	backend.StartTLS()
+	defer backend.Close()
+
+	vh := "hosts: [\"app.test\"]\nredirect_to_https: false\n" +
+		"backend_tls:\n  insecure_skip_verify: true\n" +
+		"backends:\n  - url: \"" + backend.URL + "\"\n"
+	p := newTestProxy(t, "{}\n", map[string]string{"app.yaml": vh})
+
+	req := httptest.NewRequest("GET", "http://app.test/", nil)
+	req.Host = "app.test"
+	rec := httptest.NewRecorder()
+	p.Handler(false).ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if got := rec.Header().Get("X-Backend-Proto"); got != "HTTP/2.0" {
+		t.Fatalf("backend saw %q, want HTTP/2.0 (h2 not negotiated end-to-end)", got)
+	}
+}
+
 func TestUnknownHost404(t *testing.T) {
 	p := newTestProxy(t, "{}\n", nil)
 	req := httptest.NewRequest("GET", "http://nobody.test/", nil)

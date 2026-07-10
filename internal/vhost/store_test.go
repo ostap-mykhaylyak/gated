@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ostap-mykhaylyak/gated/internal/config"
@@ -99,6 +100,27 @@ func TestInheritedDefaults(t *testing.T) {
 	}
 	if v.Pool == nil {
 		t.Fatal("pool not built")
+	}
+	if v.BackendProtocol != "auto" || v.Transport == nil {
+		t.Fatalf("backend protocol default/transport wrong: %q %v", v.BackendProtocol, v.Transport)
+	}
+}
+
+func TestBackendProtocolValidation(t *testing.T) {
+	cfg := config.Default()
+
+	// http3 requires https backends.
+	err := Validate([]byte("hosts: [x.test]\nbackend_protocol: http3\nbackends:\n  - url: \"http://127.0.0.1:8080\"\n"), cfg)
+	if err == nil || !strings.Contains(err.Error(), "http3 requires an https") {
+		t.Fatalf("http3 with http backend must fail, got %v", err)
+	}
+	// http3 with an https backend is accepted.
+	if err := Validate([]byte("hosts: [x.test]\nbackend_protocol: http3\nbackends:\n  - url: \"https://127.0.0.1:8443\"\n"), cfg); err != nil {
+		t.Fatalf("http3 + https backend must validate: %v", err)
+	}
+	// Unknown protocol rejected.
+	if err := Validate([]byte("hosts: [x.test]\nbackend_protocol: spdy\nbackends:\n  - url: \"http://127.0.0.1:8080\"\n"), cfg); err == nil {
+		t.Fatal("unknown backend_protocol must fail")
 	}
 }
 

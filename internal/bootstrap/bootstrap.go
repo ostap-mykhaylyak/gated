@@ -29,6 +29,7 @@ var UnitFile []byte
 const (
 	skelConfig    = "skel/etc/gated/config.yaml"
 	skelVhost     = "skel/etc/gated/vhosts/example.com.yaml.example"
+	skelWAFDir    = "skel/etc/gated/waf"
 	skelLogrotate = "skel/etc/logrotate.d/gated"
 )
 
@@ -36,7 +37,7 @@ const (
 // default config WITHOUT overwriting an existing one. Used both by
 // --init and by the first daemon start without a config.
 func EnsureLayout(out io.Writer) error {
-	for _, dir := range []string{paths.ConfigDir, paths.VhostsDir, paths.LogDir} {
+	for _, dir := range []string{paths.ConfigDir, paths.VhostsDir, paths.WAFDir, paths.LogDir} {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return fmt.Errorf("create %s: %w", dir, err)
 		}
@@ -51,6 +52,17 @@ func EnsureLayout(out io.Writer) error {
 	example := filepath.Join(paths.VhostsDir, "example.com.yaml.example")
 	if _, err := installIfMissing(skelVhost, example, 0o640); err != nil {
 		return err
+	}
+	// Install the starter WAF rules (without overwriting operator edits).
+	entries, err := skelFS.ReadDir(skelWAFDir)
+	if err != nil {
+		return fmt.Errorf("embedded skel: %w", err)
+	}
+	for _, e := range entries {
+		dst := filepath.Join(paths.WAFDir, e.Name())
+		if _, err := installIfMissing(skelWAFDir+"/"+e.Name(), dst, 0o640); err != nil {
+			return err
+		}
 	}
 	return nil
 }

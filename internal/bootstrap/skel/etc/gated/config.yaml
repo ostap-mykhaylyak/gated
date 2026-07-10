@@ -51,6 +51,16 @@ health:
   max_fails: 3
   cooldown: "30s"
 
+waf:
+  # Web application firewall. Rules live in rules_dir, one group per
+  # YAML file (see waf/*.yaml), hot-reloaded. Disabled by default.
+  # mode "detect" logs matches without blocking (use it to tune, then
+  # switch to "block"). Per-vhost overrides available in the vhost file.
+  enabled: false
+  rules_dir: "/etc/gated/waf"
+  mode: block                   # block | detect
+  max_body_bytes: 131072        # request body inspected up to this size (0 = never)
+
 api:
   # Optional management REST API. Disabled by default; enabling it
   # REQUIRES a token and makes /etc/gated/vhosts writable (see the

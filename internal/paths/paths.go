@@ -16,6 +16,9 @@ const (
 	// VhostsDir holds one YAML file per virtual host.
 	VhostsDir = ConfigDir + "/vhosts"
 
+	// WAFDir holds the WAF rule files (one group per YAML file).
+	WAFDir = ConfigDir + "/waf"
+
 	// LogDir holds all log files and runtime state. It is the only
 	// path the daemon is guaranteed to be able to write to.
 	LogDir = "/var/log/gated"
@@ -40,4 +43,5 @@ const (
 	AccessLog  = "access.log"
 	BackendLog = "backend.log"
 	APILog     = "api.log"
+	WAFLog     = "waf.log"
 )

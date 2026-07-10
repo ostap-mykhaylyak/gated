@@ -17,6 +17,13 @@ import (
 	"github.com/ostap-mykhaylyak/gated/internal/vhost"
 )
 
+// WAFProvider is the subset of the WAF engine the status collector
+// needs (kept as an interface to avoid a hard dependency).
+type WAFProvider interface {
+	Count() int
+	ActiveBans() int
+}
+
 // Check statuses, ordered by severity. Exit codes follow the Nagios
 // convention: 0 OK, 1 WARNING, 2 CRITICAL, 3 UNKNOWN.
 const (
@@ -60,6 +67,15 @@ type VhostsSection struct {
 	Items []vhost.Info `json:"items"`
 }
 
+// WAFSection describes the WAF engine state.
+type WAFSection struct {
+	Enabled    bool  `json:"enabled"`
+	Rules      int   `json:"rules"`
+	ActiveBans int   `json:"active_bans"`
+	Blocked    int64 `json:"blocked"`
+	Banned     int64 `json:"banned"`
+}
+
 // Snapshot is the full status document served over the socket.
 // Field names are stable across versions.
 type Snapshot struct {
@@ -68,6 +84,7 @@ type Snapshot struct {
 	Service   ServiceInfo       `json:"service"`
 	Config    ConfigInfo        `json:"config"`
 	Vhosts    *VhostsSection    `json:"vhosts,omitempty"` // only when the daemon answered
+	WAF       *WAFSection       `json:"waf,omitempty"`    // only when the daemon answered
 	Checks    []Check           `json:"checks"`
 	Live      *metrics.Snapshot `json:"live,omitempty"` // only when the daemon answered
 	Timestamp time.Time         `json:"timestamp"`
@@ -104,7 +121,7 @@ func worst(checks []Check) string {
 // NewCollector builds the snapshot function the daemon serves on the
 // socket. It computes the checks at request time from state the daemon
 // already holds.
-func NewCollector(version string, mgr *config.Manager, vhosts *vhost.Store, m *metrics.Metrics, logDir string) func() *Snapshot {
+func NewCollector(version string, mgr *config.Manager, vhosts *vhost.Store, wafEngine WAFProvider, m *metrics.Metrics, logDir string) func() *Snapshot {
 	start := time.Now()
 	return func() *Snapshot {
 		cfg := mgr.Get()
@@ -141,6 +158,15 @@ func NewCollector(version string, mgr *config.Manager, vhosts *vhost.Store, m *m
 			checks = append(checks, Check{"log_dir", OK, "writable"})
 		}
 
+		live := m.Snapshot()
+		snap.WAF = &WAFSection{
+			Enabled:    cfg.WAF.Enabled,
+			Rules:      wafEngine.Count(),
+			ActiveBans: wafEngine.ActiveBans(),
+			Blocked:    live.WAFBlocked,
+			Banned:     live.WAFBanned,
+		}
+
 		items := vhosts.Snapshot()
 		snap.Vhosts = &VhostsSection{Files: len(items), Hosts: vhosts.Count(), Items: items}
 		if len(items) == 0 {
@@ -161,7 +187,6 @@ func NewCollector(version string, mgr *config.Manager, vhosts *vhost.Store, m *m
 			}
 		}
 
-		live := m.Snapshot()
 		snap.Live = &live
 		snap.Checks = checks
 		snap.Status = worst(checks)

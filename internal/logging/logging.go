@@ -62,6 +62,7 @@ type Streams struct {
 	Access  *slog.Logger // one line per proxied request
 	Backend *slog.Logger // backend failures, health state changes
 	API     *slog.Logger // management API audit trail
+	WAF     *slog.Logger // WAF matches, blocks and bans
 
 	files []*reopenFile
 }
@@ -77,6 +78,7 @@ func Open(dir string) (*Streams, error) {
 		{paths.AccessLog, &s.Access},
 		{paths.BackendLog, &s.Backend},
 		{paths.APILog, &s.API},
+		{paths.WAFLog, &s.WAF},
 	} {
 		rf, err := openFile(filepath.Join(dir, def.name))
 		if err != nil {

@@ -82,6 +82,10 @@ func print(snap *Snapshot, jsonOut bool, prev *Snapshot, elapsed time.Duration) 
 		fmt.Printf("errors:   %d total, %.1f err/s\n", snap.Live.ErrorsTotal, errRate)
 		fmt.Printf("bytes:    %s out\n", humanBytes(snap.Live.BytesOutTotal))
 	}
+	if snap.WAF != nil && snap.WAF.Enabled {
+		fmt.Printf("waf:      %d rules, %d active bans, %d blocked, %d banned\n",
+			snap.WAF.Rules, snap.WAF.ActiveBans, snap.WAF.Blocked, snap.WAF.Banned)
+	}
 	if snap.Vhosts != nil {
 		for _, v := range snap.Vhosts.Items {
 			states := make([]string, 0, len(v.Backends))
@@ -126,6 +130,9 @@ func summaryLine(snap *Snapshot) string {
 		label, snap.Service.PID, uptime, boolWord(snap.Config.Valid && snap.Config.Error == "", "valid", "reload pending"))
 	if snap.Vhosts != nil {
 		line += fmt.Sprintf(", %d vhost(s)/%d host(s)", snap.Vhosts.Files, snap.Vhosts.Hosts)
+	}
+	if snap.WAF != nil && snap.WAF.Enabled {
+		line += fmt.Sprintf(", waf %d rules/%d bans", snap.WAF.Rules, snap.WAF.ActiveBans)
 	}
 	if snap.Live != nil {
 		line += fmt.Sprintf(", in-flight %d, requests %d, errors %d",

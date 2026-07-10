@@ -15,6 +15,7 @@ import (
 	"github.com/ostap-mykhaylyak/gated/internal/metrics"
 	"github.com/ostap-mykhaylyak/gated/internal/status"
 	"github.com/ostap-mykhaylyak/gated/internal/vhost"
+	"github.com/ostap-mykhaylyak/gated/internal/waf"
 )
 
 var discard = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -45,7 +46,10 @@ func newFixture(t *testing.T) *fixture {
 	store.LoadAll(mgr.Get())
 	t.Cleanup(store.Close)
 
-	collect := status.NewCollector("test", mgr, store, metrics.New(), t.TempDir())
+	wafEngine := waf.New(t.TempDir(), discard, metrics.New())
+	wafEngine.LoadAll()
+	t.Cleanup(wafEngine.Close)
+	collect := status.NewCollector("test", mgr, store, wafEngine, metrics.New(), t.TempDir())
 	s := New(mgr, store, collect, discard, vdir)
 	return &fixture{handler: s.Handler(), store: store, dir: vdir}
 }

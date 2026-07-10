@@ -1,0 +1,57 @@
+# gated WAF - starter rules (demonstration, NOT a full ruleset).
+#
+# One file = one rule group. Files are hot-reloaded; an invalid rule is
+# skipped with a warning, the rest keep working. Enable the WAF in
+# config.yaml (waf.enabled: true) and per-vhost as needed. Start in
+# waf.mode: detect to tune, then switch to block.
+#
+# See docs/waf-conversion-prompt.md to convert ModSecurity/Coraza,
+# Nuclei and fail2ban rules into this format.
+
+group: common
+description: Baseline protections and an allowlist example.
+
+rules:
+  # Allowlist wins over every block rule below. Use it for health
+  # probes or known-good paths that might trip a broad rule.
+  - id: "allow-healthz"
+    msg: "allow health probe"
+    action: allow
+    match:
+      - field: path
+        operator: eq
+        patterns: ["/healthz", "/health"]
+
+  # Path traversal in the URI.
+  - id: "gated-traversal"
+    msg: "Path traversal attempt"
+    severity: high
+    action: block
+    status: 403
+    match:
+      - field: uri
+        operator: rx
+        transform: [urldecode, lowercase]
+        patterns: ['\.\./', '\.\.\\', '/etc/passwd', '/proc/self/environ']
+
+  # Probes for exposed secrets / VCS metadata (common scanners).
+  - id: "gated-sensitive-paths"
+    msg: "Access to sensitive path"
+    severity: high
+    action: block
+    match:
+      - field: path
+        operator: rx
+        transform: [lowercase]
+        patterns: ['^/\.env', '^/\.git/', '^/\.aws/', '/wp-config\.php$', '/\.ssh/']
+
+  # Absurdly long or missing User-Agent is a weak bot signal: log only.
+  - id: "gated-empty-ua"
+    msg: "Empty User-Agent"
+    severity: low
+    action: log
+    match:
+      - field: header
+        name: User-Agent
+        operator: rx
+        patterns: ['^$']

@@ -11,10 +11,12 @@ package vhost
 import (
 	"crypto/tls"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -123,6 +125,78 @@ type Headers struct {
 	Response HeaderOps `yaml:"response"`
 }
 
+// Route matches a subset of a vhost's requests by path (and optionally
+// method) and can send them to their own backends, rewrite the path,
+// and/or split a share to a canary. Routes are tried in order; the
+// first match wins. A request matching no route uses the vhost's
+// default backends.
+type Route struct {
+	PathPrefix     string        `yaml:"path_prefix"`
+	PathRegex      string        `yaml:"path_regex"`
+	Methods        []string      `yaml:"methods"`
+	Backends       []BackendConf `yaml:"backends"`        // empty = vhost default backends
+	StripPrefix    string        `yaml:"strip_prefix"`    // remove this prefix before proxying
+	RewriteRegex   string        `yaml:"rewrite_regex"`   // regex applied to the path
+	RewriteReplace string        `yaml:"rewrite_replace"` // replacement for rewrite_regex
+	Canary         *Canary       `yaml:"canary"`
+
+	Pool    *balancer.Pool `yaml:"-"`
+	regex   *regexp.Regexp
+	rewrite *regexp.Regexp
+	methods map[string]bool
+}
+
+// Canary sends a share of a route's traffic to an alternate backend set
+// (blue-green / canary). Selection is by header, then cookie, then a
+// random weight (percent).
+type Canary struct {
+	Backends    []BackendConf `yaml:"backends"`
+	Weight      int           `yaml:"weight"`       // 0-100 percent routed to the canary
+	Header      string        `yaml:"header"`       // route to canary if this header is present
+	HeaderValue string        `yaml:"header_value"` // ...and equals this value (optional)
+	Cookie      string        `yaml:"cookie"`       // route to canary if this cookie is present
+
+	Pool *balancer.Pool `yaml:"-"`
+}
+
+// Hit reports whether the request should go to the canary pool.
+func (r *Route) Hit(req *http.Request) bool {
+	c := r.Canary
+	if c == nil || c.Pool == nil {
+		return false
+	}
+	if c.Header != "" {
+		v := req.Header.Get(c.Header)
+		if c.HeaderValue != "" {
+			return v == c.HeaderValue
+		}
+		return v != ""
+	}
+	if c.Cookie != "" {
+		_, err := req.Cookie(c.Cookie)
+		return err == nil
+	}
+	if c.Weight > 0 {
+		return rand.IntN(100) < c.Weight
+	}
+	return false
+}
+
+// RewritePath applies the route's strip_prefix and/or regex rewrite to
+// path, returning the possibly-rewritten path.
+func (r *Route) RewritePath(path string) string {
+	if r.StripPrefix != "" && strings.HasPrefix(path, r.StripPrefix) {
+		path = path[len(r.StripPrefix):]
+		if !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
+	}
+	if r.rewrite != nil {
+		path = r.rewrite.ReplaceAllString(path, r.RewriteReplace)
+	}
+	return path
+}
+
 // CORS configures cross-origin resource sharing for the vhost.
 type CORS struct {
 	Enabled          bool            `yaml:"enabled"`
@@ -147,6 +221,7 @@ type VHost struct {
 	Compression     Compression   `yaml:"compression"`
 	Headers         Headers       `yaml:"headers"`
 	CORS            CORS          `yaml:"cors"`
+	Routes          []Route       `yaml:"routes"`
 	WAF             WAFOverride   `yaml:"waf"`
 
 	// Resolved at load time, not part of the YAML.
@@ -217,6 +292,26 @@ func loadFile(path string, cfg *config.Config, prev *VHost) (*VHost, error) {
 		return nil, err
 	}
 	v.Pool = pool
+
+	// Build per-route and canary pools (fresh each reload; they share
+	// the vhost's backend transport and load-balancing settings).
+	for i := range v.Routes {
+		rt := &v.Routes[i]
+		if len(rt.Backends) > 0 {
+			p, err := balancer.New(v.poolConfWith(rt.Backends), nil)
+			if err != nil {
+				return nil, fmt.Errorf("routes[%d]: %w", i, err)
+			}
+			rt.Pool = p
+		}
+		if rt.Canary != nil && len(rt.Canary.Backends) > 0 {
+			p, err := balancer.New(v.poolConfWith(rt.Canary.Backends), nil)
+			if err != nil {
+				return nil, fmt.Errorf("routes[%d].canary: %w", i, err)
+			}
+			rt.Canary.Pool = p
+		}
+	}
 
 	// Reuse the previous transport when the TLS settings and protocol
 	// are unchanged, to preserve backend keep-alive connections across
@@ -358,6 +453,74 @@ func (v *VHost) validate() error {
 	if (v.TLS.CertFile == "") != (v.TLS.KeyFile == "") {
 		return fmt.Errorf("tls.cert_file and tls.key_file must be set together")
 	}
+
+	for i := range v.Routes {
+		if err := v.Routes[i].validate(v); err != nil {
+			return fmt.Errorf("routes[%d]: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// validate checks and compiles one route.
+func (rt *Route) validate(v *VHost) error {
+	if rt.PathPrefix == "" && rt.PathRegex == "" {
+		return fmt.Errorf("path_prefix or path_regex is required")
+	}
+	if rt.PathPrefix != "" && rt.PathRegex != "" {
+		return fmt.Errorf("path_prefix and path_regex are mutually exclusive")
+	}
+	if rt.PathRegex != "" {
+		re, err := regexp.Compile(rt.PathRegex)
+		if err != nil {
+			return fmt.Errorf("path_regex: %w", err)
+		}
+		rt.regex = re
+	}
+	if len(rt.Methods) > 0 {
+		rt.methods = make(map[string]bool, len(rt.Methods))
+		for _, m := range rt.Methods {
+			rt.methods[strings.ToUpper(m)] = true
+		}
+	}
+	if rt.RewriteRegex != "" {
+		re, err := regexp.Compile(rt.RewriteRegex)
+		if err != nil {
+			return fmt.Errorf("rewrite_regex: %w", err)
+		}
+		rt.rewrite = re
+	}
+	if err := validateBackends(rt.Backends, v.BackendProtocol); err != nil {
+		return err
+	}
+	if c := rt.Canary; c != nil {
+		if c.Weight < 0 || c.Weight > 100 {
+			return fmt.Errorf("canary.weight must be between 0 and 100")
+		}
+		if len(c.Backends) == 0 {
+			return fmt.Errorf("canary requires backends")
+		}
+		if err := validateBackends(c.Backends, v.BackendProtocol); err != nil {
+			return fmt.Errorf("canary: %w", err)
+		}
+	}
+	return nil
+}
+
+// validateBackends checks a backend list (shared by vhost and routes).
+func validateBackends(backends []BackendConf, proto string) error {
+	for i, b := range backends {
+		u, err := url.Parse(b.URL)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return fmt.Errorf("backends[%d].url must be a valid http(s) URL, got %q", i, b.URL)
+		}
+		if b.Weight < 0 {
+			return fmt.Errorf("backends[%d].weight must be >= 0", i)
+		}
+		if proto == "http3" && u.Scheme != "https" {
+			return fmt.Errorf("backends[%d]: backend_protocol http3 requires an https:// backend", i)
+		}
+	}
 	return nil
 }
 
@@ -402,7 +565,11 @@ func (v *VHost) resolveWAF(cfg *config.Config) {
 	v.WAFPol = pol
 }
 
-func (v *VHost) poolConf() balancer.Conf {
+func (v *VHost) poolConf() balancer.Conf { return v.poolConfWith(v.Backends) }
+
+// poolConfWith builds a pool config from the vhost's load-balancing
+// settings but an arbitrary backend set (used by routes and canaries).
+func (v *VHost) poolConfWith(backends []BackendConf) balancer.Conf {
 	conf := balancer.Conf{
 		Strategy: v.LoadBalancing.Strategy,
 		Sticky: balancer.StickyConf{
@@ -423,12 +590,48 @@ func (v *VHost) poolConf() balancer.Conf {
 			ExpectStatus: a.ExpectStatus,
 		}
 	}
-	for _, b := range v.Backends {
+	for _, b := range backends {
 		conf.Backends = append(conf.Backends, balancer.BackendConf{
 			URL: b.URL, Weight: b.Weight, Backup: b.Backup,
 		})
 	}
 	return conf
+}
+
+// MatchRoute returns the first route matching the method and path, or
+// nil when none match (the vhost's default backends are then used).
+func (v *VHost) MatchRoute(method, path string) *Route {
+	for i := range v.Routes {
+		rt := &v.Routes[i]
+		if len(rt.methods) > 0 && !rt.methods[method] {
+			continue
+		}
+		if rt.regex != nil {
+			if rt.regex.MatchString(path) {
+				return rt
+			}
+			continue
+		}
+		if strings.HasPrefix(path, rt.PathPrefix) {
+			return rt
+		}
+	}
+	return nil
+}
+
+// ClosePools closes the default pool plus every route/canary pool.
+func (v *VHost) ClosePools() {
+	if v.Pool != nil {
+		v.Pool.Close()
+	}
+	for i := range v.Routes {
+		if v.Routes[i].Pool != nil {
+			v.Routes[i].Pool.Close()
+		}
+		if v.Routes[i].Canary != nil && v.Routes[i].Canary.Pool != nil {
+			v.Routes[i].Canary.Pool.Close()
+		}
+	}
 }
 
 // normalizeHost lowercases and strips port and trailing dot.

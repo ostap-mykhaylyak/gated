@@ -346,6 +346,74 @@ func TestCORS(t *testing.T) {
 	}
 }
 
+func TestPathRoutingAndRewrite(t *testing.T) {
+	def := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "default:"+r.URL.Path)
+	}))
+	defer def.Close()
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "api:"+r.URL.Path)
+	}))
+	defer api.Close()
+
+	vh := "hosts: [\"app.test\"]\nredirect_to_https: false\n" +
+		"backends:\n  - url: \"" + def.URL + "\"\n" +
+		"routes:\n" +
+		"  - path_prefix: \"/api\"\n    strip_prefix: \"/api\"\n    backends:\n      - url: \"" + api.URL + "\"\n"
+	p := newTestProxy(t, "{}\n", map[string]string{"app.yaml": vh})
+
+	get := func(path string) string {
+		req := httptest.NewRequest("GET", "http://app.test"+path, nil)
+		req.Host = "app.test"
+		rec := httptest.NewRecorder()
+		p.Handler(false).ServeHTTP(rec, req)
+		return rec.Body.String()
+	}
+	// /api/users -> api backend, prefix stripped to /users.
+	if got := get("/api/users"); got != "api:/users" {
+		t.Fatalf("route+rewrite wrong: %q", got)
+	}
+	// /shop -> default backend, untouched.
+	if got := get("/shop"); got != "default:/shop" {
+		t.Fatalf("default route wrong: %q", got)
+	}
+}
+
+func TestCanarySplit(t *testing.T) {
+	stable := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "stable")
+	}))
+	defer stable.Close()
+	canary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "canary")
+	}))
+	defer canary.Close()
+
+	// Header-driven canary (deterministic, unlike a weight).
+	vh := "hosts: [\"app.test\"]\nredirect_to_https: false\n" +
+		"backends:\n  - url: \"" + stable.URL + "\"\n" +
+		"routes:\n  - path_prefix: \"/\"\n    canary:\n      header: \"X-Canary\"\n      header_value: \"on\"\n" +
+		"      backends:\n        - url: \"" + canary.URL + "\"\n"
+	p := newTestProxy(t, "{}\n", map[string]string{"app.yaml": vh})
+
+	do := func(canaryHeader bool) string {
+		req := httptest.NewRequest("GET", "http://app.test/", nil)
+		req.Host = "app.test"
+		if canaryHeader {
+			req.Header.Set("X-Canary", "on")
+		}
+		rec := httptest.NewRecorder()
+		p.Handler(false).ServeHTTP(rec, req)
+		return rec.Body.String()
+	}
+	if got := do(false); got != "stable" {
+		t.Fatalf("without header must hit stable, got %q", got)
+	}
+	if got := do(true); got != "canary" {
+		t.Fatalf("with X-Canary:on must hit canary, got %q", got)
+	}
+}
+
 func TestHTTP2Backend(t *testing.T) {
 	// The backend speaks HTTP/2 over TLS; gated (backend_protocol auto)
 	// must negotiate h2 end-to-end via ALPN, not fall back to h1.

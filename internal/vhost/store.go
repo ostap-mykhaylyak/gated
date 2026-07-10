@@ -101,9 +101,7 @@ func (s *Store) LoadAll(cfg *config.Config) {
 	// carried the runtime state over in loadFile).
 	for base, old := range s.byFile {
 		if nv, ok := newByFile[base]; !ok || nv != old {
-			if old.Pool != nil {
-				old.Pool.Close()
-			}
+			old.ClosePools()
 		}
 	}
 
@@ -205,8 +203,6 @@ func (s *Store) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, v := range s.byFile {
-		if v.Pool != nil {
-			v.Pool.Close()
-		}
+		v.ClosePools()
 	}
 }

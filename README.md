@@ -17,6 +17,10 @@ point of the server, in front of any service.
   cert name and can accept self-signed backend certs. `backend_protocol`
   picks the upstream wire protocol: `auto` (HTTP/2 over TLS via ALPN,
   h1 fallback — fast for remote backends), `http1`, or `http3` (QUIC).
+- **Path routing, rewrites and canary/blue-green** per vhost: match by
+  path prefix or regex (and method) to a route's own backends, strip a
+  prefix or regex-rewrite the path, and split a weighted share (or by
+  header/cookie) to a canary backend set.
 - **No redirect loops** for TLS-terminated CMSes: gated forwards
   `X-Forwarded-Proto/Ssl/Port` and upgrades a backend's `http://`
   self-redirects to `https://`, so a WordPress/CMS set to HTTPS behind

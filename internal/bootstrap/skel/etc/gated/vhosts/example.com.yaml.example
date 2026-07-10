@@ -50,6 +50,25 @@ backend_tls:                 # only relevant for https:// backends
 # HTTP/3 over QUIC (requires https:// backends).
 backend_protocol: auto       # auto | http1 | http3
 
+routes:                      # optional path-based routing (first match wins)
+  # Send /api to its own backend, stripping the /api prefix.
+  - path_prefix: "/api"
+    strip_prefix: "/api"
+    backends:
+      - url: "http://192.168.1.60:9000"
+  # Canary/blue-green: 10% of / traffic (or anyone sending the header
+  # X-Canary: on) goes to the new backend; the rest to the default ones.
+  - path_prefix: "/"
+    canary:
+      weight: 10             # 0-100 percent; or use header/cookie
+      header: "X-Canary"     # header_value: "on"   # optional exact match
+      backends:
+        - url: "http://192.168.1.70:8080"
+  # Regex rewrite example (kept commented):
+  # - path_regex: "^/old/(.*)$"
+  #   rewrite_regex: "^/old/(.*)$"
+  #   rewrite_replace: "/new/$1"
+
 load_balancing:
   strategy: "round_robin"  # round_robin | least_conn | ip_hash | uri_hash | random
   sticky:

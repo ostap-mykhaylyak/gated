@@ -123,7 +123,9 @@ or from the repo with `make install`.
 | `--version` | misc | print version, exit |
 
 `--status` exit codes follow the Nagios convention: 0 OK, 1 WARNING,
-2 CRITICAL, 3 UNKNOWN.
+2 CRITICAL, 3 UNKNOWN. Live metrics include request rate, in-flight,
+error rate, bytes served, WAF counters and **p50/p95/p99 latency**
+(from a fixed-bucket histogram); `--watch` refreshes them like `top`.
 
 ## Layout
 

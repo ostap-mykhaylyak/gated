@@ -108,6 +108,32 @@ type WAFOverride struct {
 	Exclude []string `yaml:"exclude"` // rule IDs to skip on this vhost
 }
 
+// HeaderOps mutates a header set: Remove runs first, then Set
+// (overrides), then Add (appends).
+type HeaderOps struct {
+	Set    map[string]string `yaml:"set"`
+	Add    map[string]string `yaml:"add"`
+	Remove []string          `yaml:"remove"`
+}
+
+// Headers holds request- and response-header mutations for the vhost
+// (e.g. security headers on responses, custom headers to the backend).
+type Headers struct {
+	Request  HeaderOps `yaml:"request"`
+	Response HeaderOps `yaml:"response"`
+}
+
+// CORS configures cross-origin resource sharing for the vhost.
+type CORS struct {
+	Enabled          bool            `yaml:"enabled"`
+	AllowOrigins     []string        `yaml:"allow_origins"` // exact origins or "*"
+	AllowMethods     []string        `yaml:"allow_methods"`
+	AllowHeaders     []string        `yaml:"allow_headers"`
+	ExposeHeaders    []string        `yaml:"expose_headers"`
+	AllowCredentials bool            `yaml:"allow_credentials"`
+	MaxAge           config.Duration `yaml:"max_age"`
+}
+
 // VHost is one parsed and validated virtual host.
 type VHost struct {
 	Hosts           []string      `yaml:"hosts"`
@@ -119,6 +145,8 @@ type VHost struct {
 	BackendProtocol string        `yaml:"backend_protocol"` // auto | http1 | http3
 	LoadBalancing   LB            `yaml:"load_balancing"`
 	Compression     Compression   `yaml:"compression"`
+	Headers         Headers       `yaml:"headers"`
+	CORS            CORS          `yaml:"cors"`
 	WAF             WAFOverride   `yaml:"waf"`
 
 	// Resolved at load time, not part of the YAML.

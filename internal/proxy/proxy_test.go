@@ -257,6 +257,95 @@ func TestHTTPSBackend(t *testing.T) {
 	}
 }
 
+func TestResponseAndRequestHeaders(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Server", "nginx/1.0")                     // should be stripped by gated
+		w.Header().Set("X-Backend-Saw", r.Header.Get("X-Tenant")) // request header injected
+		io.WriteString(w, "ok")
+	}))
+	defer backend.Close()
+
+	vh := "hosts: [\"app.test\"]\nredirect_to_https: false\n" +
+		"headers:\n" +
+		"  response:\n    set:\n      X-Frame-Options: SAMEORIGIN\n    remove: [Server]\n" +
+		"  request:\n    set:\n      X-Tenant: acme\n" +
+		"backends:\n  - url: \"" + backend.URL + "\"\n"
+	p := newTestProxy(t, "{}\n", map[string]string{"app.yaml": vh})
+
+	req := httptest.NewRequest("GET", "http://app.test/", nil)
+	req.Host = "app.test"
+	rec := httptest.NewRecorder()
+	p.Handler(false).ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("X-Frame-Options"); got != "SAMEORIGIN" {
+		t.Fatalf("response set header missing: %q", got)
+	}
+	if got := rec.Header().Get("Server"); got != "" {
+		t.Fatalf("Server header should be stripped, got %q", got)
+	}
+	if got := rec.Header().Get("X-Backend-Saw"); got != "acme" {
+		t.Fatalf("backend did not receive request header: %q", got)
+	}
+}
+
+func TestSecurityHeaderOnGatedPage(t *testing.T) {
+	// Response header mutations must also apply to gated-generated pages
+	// (here a 404), not only proxied responses.
+	vh := "hosts: [\"app.test\"]\nheaders:\n  response:\n    set:\n      X-Frame-Options: DENY\n" +
+		"backends:\n  - url: \"http://127.0.0.1:9\"\n"
+	p := newTestProxy(t, "{}\n", map[string]string{"app.yaml": vh})
+	req := httptest.NewRequest("GET", "http://app.test/", nil)
+	req.Host = "app.test" // redirect_to_https default true -> a 308 page
+	rec := httptest.NewRecorder()
+	p.Handler(false).ServeHTTP(rec, req)
+	if got := rec.Header().Get("X-Frame-Options"); got != "DENY" {
+		t.Fatalf("security header missing on gated response: %q", got)
+	}
+}
+
+func TestCORS(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "ok")
+	}))
+	defer backend.Close()
+
+	vh := "hosts: [\"app.test\"]\nredirect_to_https: false\n" +
+		"cors:\n  enabled: true\n  allow_origins: [\"https://good.example\"]\n" +
+		"  allow_methods: [GET, POST]\n  allow_headers: [Content-Type]\n  max_age: 1h\n" +
+		"backends:\n  - url: \"" + backend.URL + "\"\n"
+	p := newTestProxy(t, "{}\n", map[string]string{"app.yaml": vh})
+
+	// Preflight from an allowed origin -> 204 with CORS headers, no backend.
+	req := httptest.NewRequest("OPTIONS", "http://app.test/api", nil)
+	req.Host = "app.test"
+	req.Header.Set("Origin", "https://good.example")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	rec := httptest.NewRecorder()
+	p.Handler(false).ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("preflight must be 204, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://good.example" {
+		t.Fatalf("ACAO = %q", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Methods"); got == "" {
+		t.Fatal("preflight must advertise allowed methods")
+	}
+
+	// Actual request from a DISALLOWED origin -> no CORS header, still served.
+	req = httptest.NewRequest("GET", "http://app.test/api", nil)
+	req.Host = "app.test"
+	req.Header.Set("Origin", "https://evil.example")
+	rec = httptest.NewRecorder()
+	p.Handler(false).ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("disallowed-origin request should still be served, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("disallowed origin must not get ACAO, got %q", got)
+	}
+}
+
 func TestHTTP2Backend(t *testing.T) {
 	// The backend speaks HTTP/2 over TLS; gated (backend_protocol auto)
 	// must negotiate h2 end-to-end via ALPN, not fall back to h1.

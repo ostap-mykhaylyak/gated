@@ -17,6 +17,7 @@ import (
 
 	"github.com/ostap-mykhaylyak/gated/internal/api"
 	"github.com/ostap-mykhaylyak/gated/internal/bootstrap"
+	"github.com/ostap-mykhaylyak/gated/internal/cache"
 	"github.com/ostap-mykhaylyak/gated/internal/certs"
 	"github.com/ostap-mykhaylyak/gated/internal/challenge"
 	"github.com/ostap-mykhaylyak/gated/internal/config"
@@ -147,6 +148,10 @@ func runDaemon(cfgPath string) error {
 		return err
 	}
 
+	// Shared in-memory response cache (vhosts opt in via their cache
+	// section).
+	cacheStore := cache.New(mgr.Get().Cache.MaxSizeBytes)
+
 	// Vhost store (one YAML per vhost, hot-reloaded, last-good on errors).
 	vhosts := vhost.NewStore(paths.VhostsDir, logs.Service)
 	vhosts.LoadAll(mgr.Get())
@@ -178,7 +183,7 @@ func runDaemon(cfgPath string) error {
 	}
 
 	// Public entrypoints: :80, :443 TCP (h1+h2), :443 UDP (h3).
-	prx := proxy.New(mgr, vhosts, certStore, wafEngine, geo, chal, sess, pg, m, logs)
+	prx := proxy.New(mgr, vhosts, certStore, wafEngine, geo, chal, sess, pg, cacheStore, m, logs)
 	srv := proxy.NewServer(prx)
 	if err := srv.Start(); err != nil {
 		return err

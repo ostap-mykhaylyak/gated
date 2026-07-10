@@ -79,7 +79,14 @@ type Metrics struct {
 	wafBanned     atomic.Int64
 	wafChallenged atomic.Int64
 	wafCleared    atomic.Int64
+
+	cacheHits   atomic.Int64
+	cacheMisses atomic.Int64
 }
+
+// Cache counters.
+func (m *Metrics) CacheHit()  { m.cacheHits.Add(1) }
+func (m *Metrics) CacheMiss() { m.cacheMisses.Add(1) }
 
 // WAF counters, updated on the hot path by the WAF engine.
 func (m *Metrics) WAFInspect()   { m.wafInspected.Add(1) }
@@ -124,6 +131,8 @@ type Snapshot struct {
 	P50LatencyMs     float64   `json:"p50_latency_ms"`
 	P95LatencyMs     float64   `json:"p95_latency_ms"`
 	P99LatencyMs     float64   `json:"p99_latency_ms"`
+	CacheHits        int64     `json:"cache_hits"`
+	CacheMisses      int64     `json:"cache_misses"`
 	Timestamp        time.Time `json:"timestamp"`
 }
 
@@ -144,6 +153,8 @@ func (m *Metrics) Snapshot() Snapshot {
 		P50LatencyMs:     lp[0],
 		P95LatencyMs:     lp[1],
 		P99LatencyMs:     lp[2],
+		CacheHits:        m.cacheHits.Load(),
+		CacheMisses:      m.cacheMisses.Load(),
 		Timestamp:        time.Now().UTC(),
 	}
 }

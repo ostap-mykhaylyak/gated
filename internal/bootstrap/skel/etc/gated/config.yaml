@@ -60,6 +60,11 @@ geoip:
   country_db: "/usr/share/GeoIP/GeoLite2-Country.mmdb"  # or /var/lib/GeoIP/...
   asn_db: ""                    # optional, e.g. /usr/share/GeoIP/GeoLite2-ASN.mmdb
 
+cache:
+  # Shared in-memory response cache. Always allocated; each vhost opts
+  # in via its own `cache` section. This only bounds the total memory.
+  max_size_bytes: 268435456     # 256 MiB
+
 waf:
   # Web application firewall. Rules live in rules_dir, one group per
   # YAML file (see waf/*.yaml), hot-reloaded. Disabled by default.

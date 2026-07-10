@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/ostap-mykhaylyak/gated/internal/balancer"
+	"github.com/ostap-mykhaylyak/gated/internal/cache"
 	"github.com/ostap-mykhaylyak/gated/internal/certs"
 	"github.com/ostap-mykhaylyak/gated/internal/challenge"
 	"github.com/ostap-mykhaylyak/gated/internal/compress"
@@ -53,6 +54,7 @@ type Proxy struct {
 	challenge *challenge.Manager
 	session   *session.Manager
 	pages     *pages.Pages
+	cache     *cache.Store
 	m         *metrics.Metrics
 	logs      *logging.Streams
 
@@ -64,7 +66,7 @@ type Proxy struct {
 // New builds the Proxy. The backend transport is created once (its
 // ResponseHeaderTimeout comes from the initial config; changing
 // backend_timeout requires a restart, unlike everything else).
-func New(cfg *config.Manager, vhosts *vhost.Store, certStore *certs.Store, wafEngine *waf.Engine, geo *geoip.Resolver, chal *challenge.Manager, sess *session.Manager, pg *pages.Pages, m *metrics.Metrics, logs *logging.Streams) *Proxy {
+func New(cfg *config.Manager, vhosts *vhost.Store, certStore *certs.Store, wafEngine *waf.Engine, geo *geoip.Resolver, chal *challenge.Manager, sess *session.Manager, pg *pages.Pages, cacheStore *cache.Store, m *metrics.Metrics, logs *logging.Streams) *Proxy {
 	c := cfg.Get()
 	return &Proxy{
 		cfg:       cfg,
@@ -75,6 +77,7 @@ func New(cfg *config.Manager, vhosts *vhost.Store, certStore *certs.Store, wafEn
 		challenge: chal,
 		session:   sess,
 		pages:     pg,
+		cache:     cacheStore,
 		m:         m,
 		logs:      logs,
 		transport: &http.Transport{
@@ -262,6 +265,23 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 			applyHeaderOps(r.Header, v.Headers.Request)
 		}
 
+		// Response cache: on a cacheable request, serve a live hit
+		// directly (after the WAF, so bans/limits still apply). On a
+		// miss, remember the key to store the response below.
+		var cacheStoreKey string
+		if v.Cache.Enabled && !upgrade && cacheableRequest(r, &v.Cache) {
+			key := cacheKey(r, host)
+			if e, ok := p.cache.Get(key); ok {
+				p.m.CacheHit()
+				hw, finish := compress.Wrap(sw, r, v.Comp)
+				serveFromCache(hw, e)
+				finish()
+				return
+			}
+			p.m.CacheMiss()
+			cacheStoreKey = key
+		}
+
 		// Path routing: pick the matching route's pool (or a canary
 		// split), and apply any path rewrite before proxying. No match
 		// falls back to the vhost's default backends.
@@ -287,6 +307,16 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 			cw, finish = compress.Wrap(sw, r, v.Comp)
 		}
 		defer finish()
+
+		// On a cache miss, tee the uncompressed backend response into a
+		// buffer so it can be stored after a successful proxy.
+		var capture *cacheWriter
+		backendW := cw
+		if cacheStoreKey != "" {
+			capture = &cacheWriter{ResponseWriter: cw, limit: v.Cache.MaxObjectBytes}
+			backendW = capture
+			cw.Header().Set("X-Cache", "MISS")
+		}
 
 		// Balancer + retries: a transport-level failure on a
 		// replayable request (no body consumed, nothing written to the
@@ -321,9 +351,14 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 				}
 			}
 
-			err, wrote := p.forward(cw, r, b, clientIP, secure, issueVisit, v.Transport, v.Hosts)
+			err, wrote := p.forward(backendW, r, b, clientIP, secure, issueVisit, v.Transport, v.Hosts)
 			pool.Report(b, err == nil)
 			if err == nil {
+				if capture != nil {
+					if e := entryFrom(capture, cw.Header(), &v.Cache); e != nil {
+						p.cache.Set(cacheStoreKey, e)
+					}
+				}
 				return
 			}
 			p.logs.Backend.Error("backend error",

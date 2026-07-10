@@ -53,6 +53,7 @@ type Config struct {
 	Compression Compression `yaml:"compression"`
 	Health      Health      `yaml:"health"`
 	GeoIP       GeoIP       `yaml:"geoip"`
+	Cache       Cache       `yaml:"cache"`
 	WAF         WAF         `yaml:"waf"`
 	Challenge   Challenge   `yaml:"challenge"`
 	Session     Session     `yaml:"session"`
@@ -124,6 +125,12 @@ type GeoIP struct {
 	Enabled   bool   `yaml:"enabled"`
 	CountryDB string `yaml:"country_db"`
 	ASNDB     string `yaml:"asn_db"` // optional
+}
+
+// Cache configures the shared in-memory response cache. It is always
+// allocated; a vhost opts in via its own cache section.
+type Cache struct {
+	MaxSizeBytes int64 `yaml:"max_size_bytes"`
 }
 
 // WAF configures the web application firewall. Rules live in RulesDir
@@ -209,6 +216,9 @@ func Default() *Config {
 			Enabled:   false,
 			CountryDB: "/usr/share/GeoIP/GeoLite2-Country.mmdb",
 			ASNDB:     "",
+		},
+		Cache: Cache{
+			MaxSizeBytes: 256 * 1024 * 1024, // 256 MiB shared cache
 		},
 		WAF: WAF{
 			Enabled:      false,
@@ -331,6 +341,10 @@ func (c *Config) validate() error {
 
 	if c.GeoIP.Enabled && c.GeoIP.CountryDB == "" {
 		return fmt.Errorf("geoip.country_db is required when geoip.enabled is true")
+	}
+
+	if c.Cache.MaxSizeBytes < 0 {
+		return fmt.Errorf("cache.max_size_bytes must be >= 0")
 	}
 
 	switch c.WAF.Mode {

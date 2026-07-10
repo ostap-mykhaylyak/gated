@@ -82,6 +82,10 @@ func print(snap *Snapshot, jsonOut bool, prev *Snapshot, elapsed time.Duration) 
 		fmt.Printf("errors:   %d total, %.1f err/s\n", snap.Live.ErrorsTotal, errRate)
 		fmt.Printf("latency:  p50 %.0fms, p95 %.0fms, p99 %.0fms\n",
 			snap.Live.P50LatencyMs, snap.Live.P95LatencyMs, snap.Live.P99LatencyMs)
+		if hits := snap.Live.CacheHits; hits+snap.Live.CacheMisses > 0 {
+			ratio := float64(hits) / float64(hits+snap.Live.CacheMisses) * 100
+			fmt.Printf("cache:    %d hits, %d misses (%.0f%% hit)\n", hits, snap.Live.CacheMisses, ratio)
+		}
 		fmt.Printf("bytes:    %s out\n", humanBytes(snap.Live.BytesOutTotal))
 	}
 	if snap.WAF != nil && snap.WAF.Enabled {

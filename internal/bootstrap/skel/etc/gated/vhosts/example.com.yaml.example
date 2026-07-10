@@ -100,6 +100,19 @@ headers:                   # per-vhost header mutations (optional)
       - "X-Powered-By"
   request: {}              # headers toward the backend (set/add/remove)
 
+cache:                     # response cache (optional; off by default)
+  enabled: false
+  # Backend Cache-Control (max-age) wins. Otherwise:
+  #   ttl:       fallback cache time for cacheable responses
+  #   micro_ttl: short cache for text/html without Cache-Control (spike shield)
+  ttl: 0
+  micro_ttl: 0
+  max_object_bytes: 5242880          # 5 MiB largest cached object
+  cacheable_status: [200]
+  # Requests with these cookie-name prefixes bypass the cache (logged-in
+  # users, active carts): never serve them a shared cached page.
+  bypass_cookies: ["wordpress_logged_in_", "woocommerce_items_in_cart", "wp-postpass_", "comment_author_"]
+
 cors:                      # cross-origin resource sharing (optional)
   enabled: false
   allow_origins: ["https://app.example.com"]   # exact origins, or ["*"]

@@ -197,6 +197,54 @@ func (r *Route) RewritePath(path string) string {
 	return path
 }
 
+// Cache is the per-vhost response-cache policy.
+type Cache struct {
+	Enabled         bool            `yaml:"enabled"`
+	TTL             config.Duration `yaml:"ttl"`              // fallback TTL when the backend sets no Cache-Control max-age
+	MicroTTL        config.Duration `yaml:"micro_ttl"`        // short TTL for text/html without Cache-Control (spike shield)
+	MaxObjectBytes  int64           `yaml:"max_object_bytes"` // largest response cached; default 5 MiB
+	CacheableStatus []int           `yaml:"cacheable_status"` // default [200]
+	BypassCookies   []string        `yaml:"bypass_cookies"`   // request cookie name prefixes that skip the cache
+
+	statusOK map[int]bool `yaml:"-"`
+}
+
+// resolveCache fills the cache policy defaults after parsing.
+func (v *VHost) resolveCache() {
+	if !v.Cache.Enabled {
+		return
+	}
+	if v.Cache.MaxObjectBytes <= 0 {
+		v.Cache.MaxObjectBytes = 5 * 1024 * 1024
+	}
+	if len(v.Cache.CacheableStatus) == 0 {
+		v.Cache.CacheableStatus = []int{200}
+	}
+	v.Cache.statusOK = make(map[int]bool, len(v.Cache.CacheableStatus))
+	for _, s := range v.Cache.CacheableStatus {
+		v.Cache.statusOK[s] = true
+	}
+}
+
+// CacheableStatusOK reports whether status may be cached for this vhost.
+func (c *Cache) CacheableStatusOK(status int) bool { return c.statusOK[status] }
+
+// Bypassed reports whether the request must skip the cache (a bypass
+// cookie by name prefix, or an Authorization header).
+func (c *Cache) Bypassed(r *http.Request) bool {
+	if r.Header.Get("Authorization") != "" {
+		return true
+	}
+	for _, ck := range r.Cookies() {
+		for _, pref := range c.BypassCookies {
+			if strings.HasPrefix(ck.Name, pref) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // CORS configures cross-origin resource sharing for the vhost.
 type CORS struct {
 	Enabled          bool            `yaml:"enabled"`
@@ -221,6 +269,7 @@ type VHost struct {
 	Compression     Compression   `yaml:"compression"`
 	Headers         Headers       `yaml:"headers"`
 	CORS            CORS          `yaml:"cors"`
+	Cache           Cache         `yaml:"cache"`
 	Routes          []Route       `yaml:"routes"`
 	WAF             WAFOverride   `yaml:"waf"`
 
@@ -282,6 +331,7 @@ func loadFile(path string, cfg *config.Config, prev *VHost) (*VHost, error) {
 	}
 	v.resolveCompression(cfg)
 	v.resolveWAF(cfg)
+	v.resolveCache()
 
 	var prevPool *balancer.Pool
 	if prev != nil {

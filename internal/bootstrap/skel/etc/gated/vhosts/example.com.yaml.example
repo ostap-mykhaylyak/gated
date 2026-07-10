@@ -44,6 +44,12 @@ backend_tls:                 # only relevant for https:// backends
   # server_name: "example.com"      # SNI / cert name when addressing a backend by IP
   insecure_skip_verify: false       # true = accept self-signed backend certs (trusted LAN only)
 
+# Wire protocol toward the backend. "auto" negotiates HTTP/2 over TLS
+# (ALPN) when the backend supports it, falling back to HTTP/1.1 — a big
+# win for remote backends. "http1" forces HTTP/1.1; "http3" uses
+# HTTP/3 over QUIC (requires https:// backends).
+backend_protocol: auto       # auto | http1 | http3
+
 load_balancing:
   strategy: "round_robin"  # round_robin | least_conn | ip_hash | uri_hash | random
   sticky:

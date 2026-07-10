@@ -14,7 +14,9 @@ point of the server, in front of any service.
   active health checks). Backend health state survives config reloads.
   Backends (in each vhost file) take a full `url` — any IP/host, any
   port, `http://` or `https://`; per-vhost `backend_tls` sets the SNI /
-  cert name and can accept self-signed backend certs.
+  cert name and can accept self-signed backend certs. `backend_protocol`
+  picks the upstream wire protocol: `auto` (HTTP/2 over TLS via ALPN,
+  h1 fallback — fast for remote backends), `http1`, or `http3` (QUIC).
 - **No redirect loops** for TLS-terminated CMSes: gated forwards
   `X-Forwarded-Proto/Ssl/Port` and upgrades a backend's `http://`
   self-redirects to `https://`, so a WordPress/CMS set to HTTPS behind

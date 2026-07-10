@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quic-go/quic-go/http3"
 	"gopkg.in/yaml.v3"
 
 	"github.com/ostap-mykhaylyak/gated/internal/balancer"
@@ -115,6 +116,7 @@ type VHost struct {
 	EarlyHints      []string      `yaml:"early_hints"`
 	Backends        []BackendConf `yaml:"backends"`
 	BackendTLS      BackendTLS    `yaml:"backend_tls"`
+	BackendProtocol string        `yaml:"backend_protocol"` // auto | http1 | http3
 	LoadBalancing   LB            `yaml:"load_balancing"`
 	Compression     Compression   `yaml:"compression"`
 	WAF             WAFOverride   `yaml:"waf"`
@@ -124,7 +126,7 @@ type VHost struct {
 	Comp      compress.Settings `yaml:"-"` // global defaults + overrides
 	WAFPol    waf.Policy        `yaml:"-"` // global WAF + overrides
 	Pool      *balancer.Pool    `yaml:"-"`
-	Transport *http.Transport   `yaml:"-"` // backend transport (per-vhost TLS)
+	Transport http.RoundTripper `yaml:"-"` // backend transport (per-vhost TLS/protocol)
 }
 
 // defaults returns a VHost pre-filled with production defaults; the
@@ -132,6 +134,7 @@ type VHost struct {
 func defaults(cfg *config.Config) *VHost {
 	return &VHost{
 		RedirectToHTTPS: true,
+		BackendProtocol: "auto",
 		LoadBalancing: LB{
 			Strategy: "round_robin",
 			Sticky:   Sticky{Cookie: "gated_affinity", TTL: config.Duration(time.Hour)},
@@ -187,19 +190,47 @@ func loadFile(path string, cfg *config.Config, prev *VHost) (*VHost, error) {
 	}
 	v.Pool = pool
 
-	// Reuse the previous transport when the TLS settings are unchanged,
-	// to preserve backend keep-alive connections across reloads.
-	if prev != nil && prev.Transport != nil && prev.BackendTLS == v.BackendTLS {
+	// Reuse the previous transport when the TLS settings and protocol
+	// are unchanged, to preserve backend keep-alive connections across
+	// reloads.
+	if prev != nil && prev.Transport != nil &&
+		prev.BackendTLS == v.BackendTLS && prev.BackendProtocol == v.BackendProtocol {
 		v.Transport = prev.Transport
 	} else {
-		v.Transport = buildTransport(cfg, v.BackendTLS)
+		v.Transport = buildTransport(cfg, v.BackendTLS, v.BackendProtocol)
 	}
 	return v, nil
 }
 
-// buildTransport creates the backend transport for a vhost, applying
-// the per-vhost TLS settings for HTTPS upstreams.
-func buildTransport(cfg *config.Config, btls BackendTLS) *http.Transport {
+// backendTLSConfig builds the client TLS config for HTTPS backends, or
+// nil when no override is needed.
+func backendTLSConfig(btls BackendTLS) *tls.Config {
+	if btls.ServerName == "" && !btls.InsecureSkipVerify {
+		return nil
+	}
+	return &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		ServerName:         btls.ServerName,
+		InsecureSkipVerify: btls.InsecureSkipVerify,
+	}
+}
+
+// buildTransport creates the backend transport for a vhost. proto
+// selects the wire protocol toward the upstream:
+//
+//	auto  - HTTP/2 over TLS when the backend negotiates it (ALPN),
+//	        HTTP/1.1 otherwise. Best default for remote backends.
+//	http1 - force HTTP/1.1 (disable h2 negotiation).
+//	http3 - HTTP/3 over QUIC (requires https:// backends).
+func buildTransport(cfg *config.Config, btls BackendTLS, proto string) http.RoundTripper {
+	if proto == "http3" {
+		tc := backendTLSConfig(btls)
+		if tc == nil {
+			tc = &tls.Config{MinVersion: tls.VersionTLS12}
+		}
+		return &http3.Transport{TLSClientConfig: tc}
+	}
+
 	tr := &http.Transport{
 		DialContext: (&net.Dialer{
 			Timeout:   10 * time.Second,
@@ -214,13 +245,14 @@ func buildTransport(cfg *config.Config, btls BackendTLS) *http.Transport {
 		// Backends' encodings pass through untouched; gated does its own
 		// compression on the client side.
 		DisableCompression: true,
+		// Negotiate HTTP/2 over TLS even though we set a custom
+		// DialContext (which otherwise disables the auto-upgrade).
+		ForceAttemptHTTP2: proto == "auto",
 	}
-	if btls.ServerName != "" || btls.InsecureSkipVerify {
-		tr.TLSClientConfig = &tls.Config{
-			MinVersion:         tls.VersionTLS12,
-			ServerName:         btls.ServerName,
-			InsecureSkipVerify: btls.InsecureSkipVerify,
-		}
+	tr.TLSClientConfig = backendTLSConfig(btls)
+	if proto == "http1" {
+		// Belt and suspenders: refuse the h2 ALPN protocol entirely.
+		tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
 	}
 	return tr
 }
@@ -237,6 +269,12 @@ func (v *VHost) validate() error {
 		v.Hosts[i] = h
 	}
 
+	switch v.BackendProtocol {
+	case "", "auto", "http1", "http3":
+	default:
+		return fmt.Errorf("backend_protocol must be auto, http1 or http3, got %q", v.BackendProtocol)
+	}
+
 	if len(v.Backends) == 0 {
 		return fmt.Errorf("backends is required")
 	}
@@ -247,6 +285,9 @@ func (v *VHost) validate() error {
 		}
 		if b.Weight < 0 {
 			return fmt.Errorf("backends[%d].weight must be >= 0", i)
+		}
+		if v.BackendProtocol == "http3" && u.Scheme != "https" {
+			return fmt.Errorf("backends[%d]: backend_protocol http3 requires an https:// backend, got %q", i, b.URL)
 		}
 	}
 

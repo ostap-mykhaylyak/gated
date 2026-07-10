@@ -52,7 +52,7 @@ func newTestProxy(t *testing.T, globalYAML string, vhostFiles map[string]string)
 		t.Fatal(err)
 	}
 	m := metrics.New()
-	wafEngine := waf.New(t.TempDir(), logs.WAF, m)
+	wafEngine := waf.New(t.TempDir(), "", "", logs.WAF, m)
 	wafEngine.LoadAll()
 	t.Cleanup(func() { logs.Close(); store.Close(); wafEngine.Close() })
 
@@ -195,7 +195,7 @@ func wafProxy(t *testing.T, backendURL, wafRules string) http.Handler {
 
 	logs, _ := logging.Open(t.TempDir())
 	m := metrics.New()
-	wafEngine := waf.New(wdir, logs.WAF, m)
+	wafEngine := waf.New(wdir, "", "", logs.WAF, m)
 	wafEngine.LoadAll()
 	t.Cleanup(func() { logs.Close(); store.Close(); wafEngine.Close() })
 

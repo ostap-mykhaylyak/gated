@@ -132,6 +132,8 @@ type GeoIP struct {
 type WAF struct {
 	Enabled      bool   `yaml:"enabled"`
 	RulesDir     string `yaml:"rules_dir"`
+	AllowDir     string `yaml:"allow_dir"`      // folder of *.ips / *.asn whitelists
+	DenyDir      string `yaml:"deny_dir"`       // folder of *.ips / *.asn blacklists
 	Mode         string `yaml:"mode"`           // block | detect
 	MaxBodyBytes int64  `yaml:"max_body_bytes"` // request body inspected up to this size
 }
@@ -211,6 +213,8 @@ func Default() *Config {
 		WAF: WAF{
 			Enabled:      false,
 			RulesDir:     paths.WAFDir,
+			AllowDir:     paths.AllowDir,
+			DenyDir:      paths.DenyDir,
 			Mode:         "block",
 			MaxBodyBytes: 128 * 1024,
 		},

@@ -1,0 +1,13 @@
+# gated access list - BLACKLIST by IP / CIDR.
+#
+# One entry per line: a single IP (v4 or v6) or a CIDR range. Blank
+# lines and text after '#' are ignored. Drop as many *.ips files here
+# as you like (e.g. abusers.ips, badnets.ips).
+#
+# A blacklisted client is blocked outright (403), UNLESS it is also in
+# the whitelist (the whitelist always wins). Files are hot-reloaded.
+#
+# Examples (commented out — nothing is blocked by default):
+# 192.0.2.66
+# 198.51.100.0/24
+# 2001:db8:dead::/48

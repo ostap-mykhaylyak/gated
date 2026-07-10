@@ -1,0 +1,12 @@
+# gated access list - WHITELIST by ASN (Autonomous System Number).
+#
+# One ASN per line, as "AS15169" or "15169". Blank lines and text
+# after '#' are ignored. Requires geoip.enabled with an ASN database
+# (geoip.asn_db) so gated can resolve each client's network.
+#
+# Whitelisting an ASN lets ALL of that network's addresses bypass the
+# WAF — use it e.g. for a trusted crawler or your own hosting provider.
+#
+# Examples (commented out):
+# AS15169   # Google (incl. Googlebot)
+# AS8075    # Microsoft (incl. Bingbot)

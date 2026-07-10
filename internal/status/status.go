@@ -22,6 +22,7 @@ import (
 type WAFProvider interface {
 	Count() int
 	ActiveBans() int
+	AccessCounts() (allowIP, denyIP, allowASN, denyASN int)
 }
 
 // GeoIPProvider is the subset of the GeoIP resolver the status
@@ -82,6 +83,10 @@ type WAFSection struct {
 	Banned     int64 `json:"banned"`
 	Challenged int64 `json:"challenged"`
 	Cleared    int64 `json:"cleared"`
+	AllowIPs   int   `json:"allow_ips"`
+	DenyIPs    int   `json:"deny_ips"`
+	AllowASN   int   `json:"allow_asn"`
+	DenyASN    int   `json:"deny_asn"`
 }
 
 // GeoIPSection describes the GeoIP resolver state.
@@ -174,6 +179,7 @@ func NewCollector(version string, mgr *config.Manager, vhosts *vhost.Store, wafE
 		}
 
 		live := m.Snapshot()
+		allowIP, denyIP, allowASN, denyASN := wafEngine.AccessCounts()
 		snap.WAF = &WAFSection{
 			Enabled:    cfg.WAF.Enabled,
 			Rules:      wafEngine.Count(),
@@ -182,6 +188,10 @@ func NewCollector(version string, mgr *config.Manager, vhosts *vhost.Store, wafE
 			Banned:     live.WAFBanned,
 			Challenged: live.WAFChallenged,
 			Cleared:    live.WAFCleared,
+			AllowIPs:   allowIP,
+			DenyIPs:    denyIP,
+			AllowASN:   allowASN,
+			DenyASN:    denyASN,
 		}
 
 		if cfg.GeoIP.Enabled {

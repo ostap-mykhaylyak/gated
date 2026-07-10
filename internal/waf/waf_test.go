@@ -23,7 +23,7 @@ func newEngine(t *testing.T, files map[string]string) *Engine {
 			t.Fatal(err)
 		}
 	}
-	e := New(dir, discard, metrics.New())
+	e := New(dir, "", "", discard, metrics.New())
 	e.LoadAll()
 	t.Cleanup(e.Close)
 	return e
@@ -472,7 +472,7 @@ func TestShippedExampleRulesLoad(t *testing.T) {
 		os.WriteFile(filepath.Join(dir, e.Name()), data, 0o640)
 		loaded++
 	}
-	eng := New(dir, discard, metrics.New())
+	eng := New(dir, "", "", discard, metrics.New())
 	eng.LoadAll()
 	t.Cleanup(eng.Close)
 	if loaded == 0 || eng.Count() == 0 {

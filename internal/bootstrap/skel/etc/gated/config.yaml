@@ -67,6 +67,12 @@ waf:
   # switch to "block"). Per-vhost overrides available in the vhost file.
   enabled: false
   rules_dir: "/etc/gated/waf"
+  # Folder-based access lists, hot-reloaded. Drop *.ips files (single
+  # IP or CIDR, one per line) and *.asn files (one ASN per line, needs
+  # geoip.asn_db) into these directories. A whitelisted client bypasses
+  # the WAF entirely; a blacklisted one is blocked (whitelist wins).
+  allow_dir: "/etc/gated/allow"  # whitelist
+  deny_dir: "/etc/gated/deny"    # blacklist
   mode: block                   # block | detect
   max_body_bytes: 131072        # request body inspected up to this size (0 = never)
 

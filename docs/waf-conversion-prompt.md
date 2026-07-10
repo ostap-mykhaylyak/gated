@@ -146,6 +146,22 @@ Regola d'oro: **`allow` batte tutto**. Le regole `allow` vengono
 valutate per prime; se una combacia, la richiesta passa senza eseguire
 le altre.
 
+### Liste di accesso IP/ASN (allow_dir / deny_dir)
+
+Oltre alle regole YAML, gated ha liste **a cartelle** hot-reload:
+`allow_dir/*.ips` e `deny_dir/*.ips` (un IP o CIDR per riga),
+`allow_dir/*.asn` e `deny_dir/*.asn` (un ASN per riga, `AS15169` o
+`15169`; richiede geoip con ASN db). Precedenza: **whitelist IP/ASN
+batte tutto** (anche i ban), poi ban, poi **blacklist IP/ASN**, poi le
+regole. Converti qui i costrutti "lista di IP/reti" delle fonti:
+- ModSecurity `@ipMatchFromFile allow.txt` / `SecRule REMOTE_ADDR
+  "@ipMatch ..." "allow"` → riga(he) in `allow/*.ips`; la variante
+  `deny` → `deny/*.ips`.
+- fail2ban `ignoreip = 1.2.3.4 10.0.0.0/8` → `allow/*.ips`.
+- Blocchi per-ASN (es. "blocca tutta la rete X") → `deny/*.asn`.
+Non produrre regole YAML per queste: indica all'operatore le righe da
+mettere nei file `.ips`/`.asn`.
+
 ---
 
 ## 2. Da ModSecurity / Coraza (`SecRule`)

@@ -32,6 +32,11 @@ point of the server, in front of any service.
 - **GeoIP** (MaxMind `.mmdb` from the conventional `/usr/share/GeoIP/`,
   hot-swapped on refresh): the WAF `country`/`continent`/`asn` fields
   let you block or ban by geography, e.g. deny traffic from a country.
+- **IP / ASN access lists** (folder-based, hot-reloaded): drop `.ips`
+  files (single IP or CIDR) and `.asn` files (one ASN per line) into
+  `/etc/gated/allow` (whitelist) and `/etc/gated/deny` (blacklist). A
+  whitelisted client bypasses the WAF entirely; a blacklisted one is
+  blocked (whitelist always wins). ASN lists need the GeoIP ASN db.
 - **Browser challenge** (`challenge` action, Cloudflare-style): serves a
   "Checking your browser" interstitial that must run JS (and optionally
   solve a SHA-256 proof of work) to earn a signed, IP-bound clearance
@@ -115,6 +120,8 @@ or from the repo with `make install`.
 /etc/gated/config.yaml      global config (never rewritten)
 /etc/gated/vhosts/*.yaml    one file per virtual host
 /etc/gated/waf/*.yaml       WAF rule groups
+/etc/gated/allow/*.{ips,asn} IP/ASN whitelist
+/etc/gated/deny/*.{ips,asn}  IP/ASN blacklist
 /var/log/gated/             JSON logs (rotation via logrotate + SIGHUP)
 /run/gated/gated.sock       local status socket
 ```

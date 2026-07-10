@@ -19,6 +19,11 @@ const (
 	// WAFDir holds the WAF rule files (one group per YAML file).
 	WAFDir = ConfigDir + "/waf"
 
+	// AllowDir and DenyDir hold folder-based IP/ASN access lists
+	// (*.ips and *.asn files): whitelist and blacklist respectively.
+	AllowDir = ConfigDir + "/allow"
+	DenyDir  = ConfigDir + "/deny"
+
 	// PagesDir holds optional overrides for the styled error/challenge
 	// pages (message.html, challenge.html).
 	PagesDir = ConfigDir + "/pages"

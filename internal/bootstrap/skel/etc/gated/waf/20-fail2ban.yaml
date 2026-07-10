@@ -1,0 +1,43 @@
+# gated WAF - fail2ban-style stateful bans.
+#
+# These count matches per client IP and ban the IP past a threshold.
+# Rules with track.on_status count at RESPONSE time and only for the
+# listed status codes (a "failure"), mirroring a fail2ban filter's
+# failregex + maxretry/findtime/bantime.
+
+group: fail2ban
+description: Brute-force and scanner banning.
+
+rules:
+  # WordPress login brute force: ban after 5 failed (401/403) attempts
+  # within 10 minutes, for 1 hour. Equivalent to a fail2ban jail with
+  # maxretry=5, findtime=600, bantime=3600.
+  - id: "f2b-wp-login"
+    msg: "WordPress login brute force"
+    severity: high
+    action: ban
+    match:
+      - field: path
+        operator: eq
+        patterns: ["/wp-login.php", "/xmlrpc.php"]
+    track:
+      threshold: 5
+      window: 10m
+      ban_time: 1h
+      on_status: [401, 403]
+
+  # Aggressive path scanner: many probes to secret files in a short
+  # window -> ban regardless of response (request-frequency ban).
+  - id: "f2b-scanner"
+    msg: "Sensitive-path scanner"
+    severity: medium
+    action: ban
+    match:
+      - field: path
+        operator: rx
+        transform: [lowercase]
+        patterns: ['^/\.env', '^/\.git/', '/wp-config\.php', '/\.ssh/', '\.sql$']
+    track:
+      threshold: 6
+      window: 1m
+      ban_time: 30m

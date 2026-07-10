@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ostap-mykhaylyak/gated/internal/certs"
@@ -15,6 +16,7 @@ import (
 	"github.com/ostap-mykhaylyak/gated/internal/logging"
 	"github.com/ostap-mykhaylyak/gated/internal/metrics"
 	"github.com/ostap-mykhaylyak/gated/internal/vhost"
+	"github.com/ostap-mykhaylyak/gated/internal/waf"
 )
 
 var discard = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -45,9 +47,12 @@ func newTestProxy(t *testing.T, globalYAML string, vhostFiles map[string]string)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { logs.Close(); store.Close() })
+	m := metrics.New()
+	wafEngine := waf.New(t.TempDir(), logs.WAF, m)
+	wafEngine.LoadAll()
+	t.Cleanup(func() { logs.Close(); store.Close(); wafEngine.Close() })
 
-	return New(mgr, store, certs.New(t.TempDir()), metrics.New(), logs)
+	return New(mgr, store, certs.New(t.TempDir()), wafEngine, m, logs)
 }
 
 func vhostYAML(backendURL string, extra string) string {
@@ -151,6 +156,121 @@ func TestRetryOnDeadBackend(t *testing.T) {
 		if rec.Code != 200 || rec.Body.String() != "alive" {
 			t.Fatalf("attempt %d: %d %q", i, rec.Code, rec.Body.String())
 		}
+	}
+}
+
+// wafProxy wires a proxy with the WAF enabled globally and one rule
+// file, plus one vhost that inherits the global WAF policy.
+func wafProxy(t *testing.T, backendURL, wafRules string) http.Handler {
+	t.Helper()
+
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	wdir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(wdir, "rules.yaml"), []byte(wafRules), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	global := "waf:\n  enabled: true\n  mode: block\n  rules_dir: " + wdir + "\n"
+	if err := os.WriteFile(cfgPath, []byte(global), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	mgr, err := config.NewManager(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	vdir := t.TempDir()
+	os.WriteFile(filepath.Join(vdir, "app.yaml"), []byte(vhostYAML(backendURL, "")), 0o640)
+	store := vhost.NewStore(vdir, discard)
+	store.LoadAll(mgr.Get())
+
+	logs, _ := logging.Open(t.TempDir())
+	m := metrics.New()
+	wafEngine := waf.New(wdir, logs.WAF, m)
+	wafEngine.LoadAll()
+	t.Cleanup(func() { logs.Close(); store.Close(); wafEngine.Close() })
+
+	return New(mgr, store, certs.New(t.TempDir()), wafEngine, m, logs).Handler(true)
+}
+
+func TestWAFBlocksThroughProxy(t *testing.T) {
+	hits := 0
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		io.WriteString(w, "reached backend")
+	}))
+	defer backend.Close()
+
+	h := wafProxy(t, backend.URL, `
+rules:
+  - id: "942100"
+    msg: "SQLi"
+    action: block
+    status: 403
+    match:
+      - field: arg
+        operator: rx
+        transform: [lowercase, urldecode]
+        patterns: ['union\s+select']
+`)
+
+	// Malicious request: blocked with 403, backend never reached.
+	req := httptest.NewRequest("GET", "https://app.test/?q=1+UNION+SELECT", nil)
+	req.Host = "app.test"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("malicious request must be 403, got %d", rec.Code)
+	}
+	if hits != 0 {
+		t.Fatal("backend must not be reached for a blocked request")
+	}
+
+	// Clean request: passes through to the backend.
+	req = httptest.NewRequest("GET", "https://app.test/?q=hello", nil)
+	req.Host = "app.test"
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 || rec.Body.String() != "reached backend" {
+		t.Fatalf("clean request must pass: %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestWAFBodyBlockThroughProxy(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Prove the body is still intact for the backend after WAF buffering.
+		b, _ := io.ReadAll(r.Body)
+		io.WriteString(w, "got:"+string(b))
+	}))
+	defer backend.Close()
+
+	h := wafProxy(t, backend.URL, `
+rules:
+  - id: "body-xss"
+    action: block
+    match:
+      - field: body
+        operator: contains
+        patterns: ["<script"]
+`)
+
+	// Clean POST body reaches the backend unchanged (buffer + replay).
+	req := httptest.NewRequest("POST", "https://app.test/submit", strings.NewReader("name=alice"))
+	req.Host = "app.test"
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 || rec.Body.String() != "got:name=alice" {
+		t.Fatalf("clean body must reach backend intact: %d %q", rec.Code, rec.Body.String())
+	}
+
+	// Malicious body blocked.
+	req = httptest.NewRequest("POST", "https://app.test/submit", strings.NewReader("c=<script>x</script>"))
+	req.Host = "app.test"
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("malicious body must be 403, got %d", rec.Code)
 	}
 }
 

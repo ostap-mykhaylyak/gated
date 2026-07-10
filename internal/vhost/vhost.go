@@ -21,6 +21,7 @@ import (
 	"github.com/ostap-mykhaylyak/gated/internal/balancer"
 	"github.com/ostap-mykhaylyak/gated/internal/compress"
 	"github.com/ostap-mykhaylyak/gated/internal/config"
+	"github.com/ostap-mykhaylyak/gated/internal/waf"
 )
 
 // TLSConf selects the certificate for the vhost. Empty = conventional
@@ -81,6 +82,14 @@ type Compression struct {
 	MinSize    *int     `yaml:"min_size"`
 }
 
+// WAFOverride tweaks the WAF for this vhost; nil pointers mean
+// "inherit the global setting".
+type WAFOverride struct {
+	Enabled *bool    `yaml:"enabled"`
+	Mode    string   `yaml:"mode"`    // block | detect; empty = inherit
+	Exclude []string `yaml:"exclude"` // rule IDs to skip on this vhost
+}
+
 // VHost is one parsed and validated virtual host.
 type VHost struct {
 	Hosts           []string      `yaml:"hosts"`
@@ -90,11 +99,13 @@ type VHost struct {
 	Backends        []BackendConf `yaml:"backends"`
 	LoadBalancing   LB            `yaml:"load_balancing"`
 	Compression     Compression   `yaml:"compression"`
+	WAF             WAFOverride   `yaml:"waf"`
 
 	// Resolved at load time, not part of the YAML.
-	Name string            `yaml:"-"` // file base name without extension
-	Comp compress.Settings `yaml:"-"` // global defaults + overrides
-	Pool *balancer.Pool    `yaml:"-"`
+	Name   string            `yaml:"-"` // file base name without extension
+	Comp   compress.Settings `yaml:"-"` // global defaults + overrides
+	WAFPol waf.Policy        `yaml:"-"` // global WAF + overrides
+	Pool   *balancer.Pool    `yaml:"-"`
 }
 
 // defaults returns a VHost pre-filled with production defaults; the
@@ -145,6 +156,7 @@ func loadFile(path string, cfg *config.Config, prev *VHost) (*VHost, error) {
 		return nil, err
 	}
 	v.resolveCompression(cfg)
+	v.resolveWAF(cfg)
 
 	var prevPool *balancer.Pool
 	if prev != nil {
@@ -213,6 +225,12 @@ func (v *VHost) validate() error {
 		}
 	}
 
+	switch v.WAF.Mode {
+	case "", "block", "detect":
+	default:
+		return fmt.Errorf("waf.mode must be \"block\" or \"detect\", got %q", v.WAF.Mode)
+	}
+
 	if (v.TLS.CertFile == "") != (v.TLS.KeyFile == "") {
 		return fmt.Errorf("tls.cert_file and tls.key_file must be set together")
 	}
@@ -236,6 +254,28 @@ func (v *VHost) resolveCompression(cfg *config.Config) {
 	if v.Compression.MinSize != nil {
 		v.Comp.MinSize = *v.Compression.MinSize
 	}
+}
+
+// resolveWAF merges the global WAF settings with the per-vhost
+// override into the policy used on the hot path.
+func (v *VHost) resolveWAF(cfg *config.Config) {
+	pol := waf.Policy{
+		Enabled: cfg.WAF.Enabled,
+		Detect:  cfg.WAF.Mode == "detect",
+	}
+	if v.WAF.Enabled != nil {
+		pol.Enabled = *v.WAF.Enabled
+	}
+	if v.WAF.Mode != "" {
+		pol.Detect = v.WAF.Mode == "detect"
+	}
+	if len(v.WAF.Exclude) > 0 {
+		pol.Exclude = make(map[string]bool, len(v.WAF.Exclude))
+		for _, id := range v.WAF.Exclude {
+			pol.Exclude[id] = true
+		}
+	}
+	v.WAFPol = pol
 }
 
 func (v *VHost) poolConf() balancer.Conf {

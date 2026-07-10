@@ -52,6 +52,7 @@ type Config struct {
 	Proxy       Proxy       `yaml:"proxy"`
 	Compression Compression `yaml:"compression"`
 	Health      Health      `yaml:"health"`
+	WAF         WAF         `yaml:"waf"`
 	API         API         `yaml:"api"`
 
 	// Warnings collects non-fatal issues found by validate()
@@ -112,6 +113,16 @@ type Health struct {
 	Cooldown Duration `yaml:"cooldown"`
 }
 
+// WAF configures the web application firewall. Rules live in RulesDir
+// (one group per YAML file), hot-reloaded. Mode "block" enforces,
+// "detect" only logs matches (for tuning). Per-vhost overrides exist.
+type WAF struct {
+	Enabled      bool   `yaml:"enabled"`
+	RulesDir     string `yaml:"rules_dir"`
+	Mode         string `yaml:"mode"`           // block | detect
+	MaxBodyBytes int64  `yaml:"max_body_bytes"` // request body inspected up to this size
+}
+
 // API configures the optional management REST API (disabled by default).
 type API struct {
 	Enabled bool   `yaml:"enabled"`
@@ -155,6 +166,12 @@ func Default() *Config {
 		Health: Health{
 			MaxFails: 3,
 			Cooldown: Duration(30 * time.Second),
+		},
+		WAF: WAF{
+			Enabled:      false,
+			RulesDir:     paths.WAFDir,
+			Mode:         "block",
+			MaxBodyBytes: 128 * 1024,
 		},
 		API: API{
 			Enabled: false,
@@ -253,6 +270,18 @@ func (c *Config) validate() error {
 	}
 	if c.Health.Cooldown.Std() <= 0 {
 		return fmt.Errorf("health.cooldown must be positive")
+	}
+
+	switch c.WAF.Mode {
+	case "block", "detect":
+	default:
+		return fmt.Errorf("waf.mode must be \"block\" or \"detect\", got %q", c.WAF.Mode)
+	}
+	if c.WAF.Enabled && c.WAF.RulesDir == "" {
+		return fmt.Errorf("waf.rules_dir is required when waf.enabled is true")
+	}
+	if c.WAF.MaxBodyBytes < 0 {
+		return fmt.Errorf("waf.max_body_bytes must be >= 0")
 	}
 
 	if c.API.Enabled {

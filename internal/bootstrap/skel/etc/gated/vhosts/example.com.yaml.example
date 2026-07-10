@@ -46,3 +46,8 @@ load_balancing:
       expect_status: 200
 
 compression: {}            # omitted/empty = inherit the global defaults
+
+waf:                       # omitted = inherit the global WAF settings
+  # enabled: true          # force on/off for this vhost
+  # mode: detect           # block | detect (override global)
+  exclude: []              # rule IDs to skip on this vhost, e.g. ["942100"]

@@ -25,6 +25,7 @@ import (
 	"github.com/ostap-mykhaylyak/gated/internal/proxy"
 	"github.com/ostap-mykhaylyak/gated/internal/status"
 	"github.com/ostap-mykhaylyak/gated/internal/vhost"
+	"github.com/ostap-mykhaylyak/gated/internal/waf"
 )
 
 // version is injected at build time via -ldflags "-X main.version=...".
@@ -94,9 +95,19 @@ func runDaemon(cfgPath string) error {
 	m := metrics.New()
 	stop := make(chan struct{})
 
-	// Certificate cache (conventional Let's Encrypt layout) and vhost
-	// store (one YAML per vhost, hot-reloaded, last-good on errors).
+	// Certificate cache (conventional Let's Encrypt layout).
 	certStore := certs.New(mgr.Get().TLS.LetsEncryptDir)
+
+	// WAF engine (rules hot-reloaded from their directory). Loaded
+	// before the vhosts, whose policies reference it.
+	wafEngine := waf.New(mgr.Get().WAF.RulesDir, logs.WAF, m)
+	wafEngine.LoadAll()
+	if err := wafEngine.Watch(stop); err != nil {
+		return err
+	}
+	defer wafEngine.Close()
+
+	// Vhost store (one YAML per vhost, hot-reloaded, last-good on errors).
 	vhosts := vhost.NewStore(paths.VhostsDir, logs.Service)
 	vhosts.LoadAll(mgr.Get())
 	if err := vhosts.Watch(stop, mgr.Get); err != nil {
@@ -120,14 +131,14 @@ func runDaemon(cfgPath string) error {
 
 	// Local status socket: the IPC channel behind --status. If it
 	// fails the daemon still serves; --status will report not running.
-	collect := status.NewCollector(version, mgr, vhosts, m, paths.LogDir)
+	collect := status.NewCollector(version, mgr, vhosts, wafEngine, m, paths.LogDir)
 	statusSrv, err := status.Serve(paths.Socket, collect)
 	if err != nil {
 		logs.Service.Error("status socket unavailable", "error", err)
 	}
 
 	// Public entrypoints: :80, :443 TCP (h1+h2), :443 UDP (h3).
-	prx := proxy.New(mgr, vhosts, certStore, m, logs)
+	prx := proxy.New(mgr, vhosts, certStore, wafEngine, m, logs)
 	srv := proxy.NewServer(prx)
 	if err := srv.Start(); err != nil {
 		return err

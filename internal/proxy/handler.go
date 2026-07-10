@@ -10,6 +10,7 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -28,6 +29,7 @@ import (
 	"github.com/ostap-mykhaylyak/gated/internal/logging"
 	"github.com/ostap-mykhaylyak/gated/internal/metrics"
 	"github.com/ostap-mykhaylyak/gated/internal/vhost"
+	"github.com/ostap-mykhaylyak/gated/internal/waf"
 )
 
 // Proxy holds the wiring shared by every request.
@@ -35,6 +37,7 @@ type Proxy struct {
 	cfg    *config.Manager
 	vhosts *vhost.Store
 	certs  *certs.Store
+	waf    *waf.Engine
 	m      *metrics.Metrics
 	logs   *logging.Streams
 
@@ -46,12 +49,13 @@ type Proxy struct {
 // New builds the Proxy. The backend transport is created once (its
 // ResponseHeaderTimeout comes from the initial config; changing
 // backend_timeout requires a restart, unlike everything else).
-func New(cfg *config.Manager, vhosts *vhost.Store, certStore *certs.Store, m *metrics.Metrics, logs *logging.Streams) *Proxy {
+func New(cfg *config.Manager, vhosts *vhost.Store, certStore *certs.Store, wafEngine *waf.Engine, m *metrics.Metrics, logs *logging.Streams) *Proxy {
 	c := cfg.Get()
 	return &Proxy{
 		cfg:    cfg,
 		vhosts: vhosts,
 		certs:  certStore,
+		waf:    wafEngine,
 		m:      m,
 		logs:   logs,
 		transport: &http.Transport{
@@ -86,8 +90,12 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 
 		var backendURL string
 		var failed bool
+		var wafPending []*waf.Rule
 		defer func() {
 			done(sw.bytes, failed || sw.status >= 500)
+			if len(wafPending) > 0 {
+				p.waf.ObserveResponse(wafPending, clientIP, sw.status)
+			}
 			p.logs.Access.Info("request",
 				"host", host,
 				"method", r.Method,
@@ -114,6 +122,21 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 		if v == nil {
 			http.Error(sw, "unknown host", http.StatusNotFound)
 			return
+		}
+
+		// WAF: inspect the request before anything is proxied. Runs on
+		// both listeners so blocks and bans apply to :80 too.
+		if v.WAFPol.Enabled {
+			var body string
+			if p.waf.NeedsBody() {
+				body = bufferBody(r, cfg.WAF.MaxBodyBytes)
+			}
+			dec, pending := p.waf.Evaluate(waf.NewContext(r, clientIP, body), v.WAFPol)
+			wafPending = pending
+			if dec.Block {
+				http.Error(sw, "forbidden", dec.Status)
+				return
+			}
 		}
 
 		if !secure && v.RedirectToHTTPS {
@@ -289,6 +312,25 @@ func (tw *trackWriter) Write(p []byte) (int, error) {
 
 func (tw *trackWriter) Flush() {
 	http.NewResponseController(tw.ResponseWriter).Flush()
+}
+
+// bufferBody reads the request body (up to limit) into memory for WAF
+// inspection and replaces r.Body with a replayable reader, so the
+// proxy still forwards it intact. Bodies larger than the limit, or of
+// unknown length, are skipped (not inspected) to avoid buffering
+// arbitrary uploads.
+func bufferBody(r *http.Request, limit int64) string {
+	if r.Body == nil || limit <= 0 || r.ContentLength <= 0 || r.ContentLength > limit {
+		return ""
+	}
+	buf, err := io.ReadAll(r.Body)
+	r.Body.Close()
+	if err != nil {
+		r.Body = io.NopCloser(bytes.NewReader(buf))
+		return ""
+	}
+	r.Body = io.NopCloser(bytes.NewReader(buf))
+	return string(buf)
 }
 
 // normalizeHost lowercases and strips port and trailing dot.

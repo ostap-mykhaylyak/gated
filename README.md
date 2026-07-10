@@ -23,6 +23,12 @@ point of the server, in front of any service.
 - One YAML file per virtual host (`/etc/gated/vhosts/*.yaml`),
   hot-reloaded with a last-good rule (a broken file never takes a
   vhost down); unknown `Host` gets a plain 404
+- **WAF** with YAML rules (`/etc/gated/waf/*.yaml`), hot-reloaded:
+  request inspection (method/path/query/headers/cookies/args/body/IP),
+  ModSecurity-style operators and transforms, allow/block/log actions,
+  and fail2ban-style stateful IP bans (`block` vs `detect` mode, global
+  and per-vhost). Convert Coraza/ModSecurity, Nuclei and fail2ban rules
+  with [docs/waf-conversion-prompt.md](docs/waf-conversion-prompt.md).
 - Optional management REST API (vhosts as REST resources, versioned
   writes with rollback)
 
@@ -92,12 +98,14 @@ or from the repo with `make install`.
 /sbin/gated                 binary
 /etc/gated/config.yaml      global config (never rewritten)
 /etc/gated/vhosts/*.yaml    one file per virtual host
+/etc/gated/waf/*.yaml       WAF rule groups
 /var/log/gated/             JSON logs (rotation via logrotate + SIGHUP)
 /run/gated/gated.sock       local status socket
 ```
 
 Observability is reading the log files: `gated.log` (service),
-`access.log`, `backend.log`, `api.log` — all JSON, one line per event.
+`access.log`, `backend.log`, `api.log`, `waf.log` — all JSON, one line
+per event.
 
 ## License
 

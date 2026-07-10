@@ -1,0 +1,56 @@
+# gated WAF - injection signatures (starter subset, ModSecurity-style).
+# IDs mirror the OWASP CRS families so converted CRS rules slot in.
+
+group: injection
+description: SQL injection and XSS baseline signatures.
+
+rules:
+  - id: "942100"
+    msg: "SQL Injection"
+    severity: critical
+    action: block
+    status: 403
+    tags: [sqli, crs]
+    match:
+      - field: arg
+        operator: rx
+        transform: [lowercase, urldecode, removenulls]
+        patterns:
+          - 'union\s+(all\s+)?select'
+          - '\bor\s+1\s*=\s*1\b'
+          - ';\s*(drop|truncate|delete)\s+'
+          - '/\*.*\*/'
+          - '\bsleep\s*\('
+
+  - id: "941100"
+    msg: "XSS Attack"
+    severity: critical
+    action: block
+    status: 403
+    tags: [xss, crs]
+    match:
+      - field: arg
+        operator: rx
+        transform: [lowercase, urldecode, htmldecode]
+        patterns:
+          - '<script[\s>]'
+          - 'javascript:'
+          - 'onerror\s*='
+          - 'onload\s*='
+          - '<iframe[\s>]'
+
+  # Same XSS signatures against the request body (form/JSON posts).
+  - id: "941101"
+    msg: "XSS Attack (body)"
+    severity: critical
+    action: block
+    status: 403
+    tags: [xss, crs]
+    match:
+      - field: body
+        operator: rx
+        transform: [lowercase, urldecode, htmldecode]
+        patterns:
+          - '<script[\s>]'
+          - 'javascript:'
+          - 'onerror\s*='

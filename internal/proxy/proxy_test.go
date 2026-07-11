@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -516,6 +517,33 @@ func TestHTTP2Backend(t *testing.T) {
 	}
 	if got := rec.Header().Get("X-Backend-Proto"); got != "HTTP/2.0" {
 		t.Fatalf("backend saw %q, want HTTP/2.0 (h2 not negotiated end-to-end)", got)
+	}
+}
+
+func TestClientCancelDoesNotMarkBackendDown(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "ok")
+	}))
+	defer backend.Close()
+
+	p := newTestProxy(t, "{}\n", map[string]string{"app.yaml": vhostYAML(backend.URL, "")})
+
+	// Many requests whose client context is already canceled: each
+	// yields context.Canceled from the backend call. Well past max_fails
+	// (3), so without the fix the backend would be marked down.
+	for i := 0; i < 6; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		req := httptest.NewRequest("GET", "http://app.test/", nil).WithContext(ctx)
+		req.Host = "app.test"
+		p.Handler(false).ServeHTTP(httptest.NewRecorder(), req)
+	}
+
+	v := p.vhosts.Lookup("app.test")
+	for _, b := range v.Pool.Backends() {
+		if !b.Available() {
+			t.Fatalf("backend %s wrongly marked down by client cancellations", b.URL)
+		}
 	}
 }
 

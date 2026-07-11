@@ -546,24 +546,6 @@ func TestRedirectToHTTPS(t *testing.T) {
 	}
 }
 
-func TestACMEPassthrough(t *testing.T) {
-	acme := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, "token-for-"+r.URL.Path)
-	}))
-	defer acme.Close()
-
-	global := fmt.Sprintf("acme:\n  passthrough: true\n  upstream: %q\n", acme.URL)
-	p := newTestProxy(t, global, nil) // NO vhost: passthrough must work anyway
-
-	req := httptest.NewRequest("GET", "http://new.test/.well-known/acme-challenge/abc", nil)
-	req.Host = "new.test"
-	rec := httptest.NewRecorder()
-	p.Handler(false).ServeHTTP(rec, req)
-	if rec.Code != 200 || rec.Body.String() != "token-for-/.well-known/acme-challenge/abc" {
-		t.Fatalf("acme passthrough broken: %d %q", rec.Code, rec.Body.String())
-	}
-}
-
 func TestRetryOnDeadBackend(t *testing.T) {
 	alive := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "alive")

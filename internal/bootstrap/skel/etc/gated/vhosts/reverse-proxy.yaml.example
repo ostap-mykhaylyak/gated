@@ -1,21 +1,30 @@
 # gated - minimal reverse-proxy virtual host.
 #
-# The bare minimum to put gated in front of a backend: a name, the
-# backend, and HTTPS redirect. Everything else (compression, health
-# checks, WAF, ...) inherits the global defaults. Copy to <name>.yaml
-# to activate.
+# gated listens on both :80 (HTTP) and :443 (HTTPS) — see entrypoints
+# in config.yaml. This vhost is served on both; redirect_to_https
+# decides what happens to plain HTTP requests. Copy to <name>.yaml to
+# enable.
 
 hosts: ["example.com", "www.example.com"]
 
+# HTTP handling:
+#   true  - gated answers :80 with a 301 to https:// (the usual choice
+#           when the host has a certificate).
+#   false - gated proxies HTTP straight to the backend without
+#           redirecting. Use this when the CMS does its own
+#           http->https redirect, or when the site is HTTP-only (no
+#           certificate).
 redirect_to_https: true
 
-# One line per backend: the url carries scheme + host + port. Use
-# https:// to reach a TLS backend (e.g. a local nginx on :443); the SNI
-# and certificate name are taken from this vhost's first host
-# automatically, so no backend_tls is needed for the common case.
+# One line per backend: the url carries scheme + host + port. Point it
+# at your app or local nginx.
+#   - HTTPS backend: SNI / cert name auto-derive from the first host,
+#     so no backend_tls is needed for the common local-nginx case.
+#   - HTTP-only site: use http://127.0.0.1:80 here and set
+#     redirect_to_https: false above (gated then serves plain HTTP).
 backends:
   - url: "https://127.0.0.1:443"
 
-# Optional, only if the backend uses a self-signed certificate:
+# Optional, only for a self-signed backend certificate:
 # backend_tls:
 #   insecure_skip_verify: true

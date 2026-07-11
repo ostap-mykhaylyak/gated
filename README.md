@@ -41,9 +41,9 @@ point of the server, in front of any service.
   CORS (allowed origins/methods/headers, credentials, preflight)
 - Real IP resolution with trusted proxies (`X-Forwarded-For` walked
   right-to-left)
-- Certificates reused from the conventional Let's Encrypt layout
-  (`/etc/letsencrypt/live/<host>/`), hot-swapped on renewal; ACME
-  HTTP-01 challenges passed through to the local nginx
+- Certificates read from the conventional Let's Encrypt layout
+  (`/etc/letsencrypt/live/<host>/`), hot-swapped on renewal. gated does
+  not issue certificates — it only finds and loads them.
 - One YAML file per virtual host (`/etc/gated/vhosts/*.yaml`),
   hot-reloaded with a last-good rule (a broken file never takes a
   vhost down); unknown `Host` gets a plain 404

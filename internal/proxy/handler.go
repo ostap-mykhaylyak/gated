@@ -1,12 +1,12 @@
 // Package proxy is the HTTP entry point of gated: routing by Host,
-// reverse proxying with retries, real IP resolution, ACME passthrough,
-// HTTPS redirect, Early Hints, compression and the TLS/HTTP3 servers.
+// reverse proxying with retries, real IP resolution, HTTPS redirect,
+// Early Hints, compression and the TLS/HTTP3 servers.
 //
 // Layer order (outside → backend):
 //
-//	metrics → access log → real IP → ACME passthrough
-//	→ vhost lookup (miss ⇒ 404) → redirect_to_https → early hints
-//	→ compression → balancer pick → reverse proxy (with retries)
+//	metrics → access log → real IP → vhost lookup (miss ⇒ 404)
+//	→ redirect_to_https → early hints → compression → balancer pick
+//	→ reverse proxy (with retries)
 package proxy
 
 import (
@@ -58,43 +58,25 @@ type Proxy struct {
 	m         *metrics.Metrics
 	logs      *logging.Streams
 
-	transport  *http.Transport
 	resolver   resolverHolder
 	discardLog *log.Logger
 }
 
-// New builds the Proxy. The backend transport is created once (its
-// ResponseHeaderTimeout comes from the initial config; changing
-// backend_timeout requires a restart, unlike everything else).
+// New builds the Proxy. Backend transports are per-vhost (built by the
+// vhost store); the Proxy keeps only the shared request wiring.
 func New(cfg *config.Manager, vhosts *vhost.Store, certStore *certs.Store, wafEngine *waf.Engine, geo *geoip.Resolver, chal *challenge.Manager, sess *session.Manager, pg *pages.Pages, cacheStore *cache.Store, m *metrics.Metrics, logs *logging.Streams) *Proxy {
-	c := cfg.Get()
 	return &Proxy{
-		cfg:       cfg,
-		vhosts:    vhosts,
-		certs:     certStore,
-		waf:       wafEngine,
-		geoip:     geo,
-		challenge: chal,
-		session:   sess,
-		pages:     pg,
-		cache:     cacheStore,
-		m:         m,
-		logs:      logs,
-		transport: &http.Transport{
-			DialContext: (&net.Dialer{
-				Timeout:   10 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-			MaxIdleConns:          512,
-			MaxIdleConnsPerHost:   64,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: time.Second,
-			ResponseHeaderTimeout: c.Proxy.BackendTimeout.Std(),
-			// Backends' encodings pass through untouched; gated does
-			// its own compression on the client side.
-			DisableCompression: true,
-		},
+		cfg:        cfg,
+		vhosts:     vhosts,
+		certs:      certStore,
+		waf:        wafEngine,
+		geoip:      geo,
+		challenge:  chal,
+		session:    sess,
+		pages:      pg,
+		cache:      cacheStore,
+		m:          m,
+		logs:       logs,
 		discardLog: log.New(io.Discard, "", 0),
 	}
 }
@@ -134,14 +116,6 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 				"tls", secure,
 			)
 		}()
-
-		// ACME passthrough BEFORE vhost lookup: renewals must work
-		// even for hosts not configured in gated yet.
-		if !secure && cfg.ACME.Passthrough &&
-			strings.HasPrefix(r.URL.Path, "/.well-known/acme-challenge/") {
-			p.acmePassthrough(sw, r, cfg)
-			return
-		}
 
 		// Challenge-solving endpoint: handled before WAF/vhost so the
 		// interstitial's own POST is never inspected or blocked.
@@ -543,28 +517,6 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, b *balancer.Back
 	}
 	rp.ServeHTTP(tw, r)
 	return errOut, tw.wrote
-}
-
-// acmePassthrough forwards HTTP-01 challenges to the local nginx.
-func (p *Proxy) acmePassthrough(w http.ResponseWriter, r *http.Request, cfg *config.Config) {
-	u, err := url.Parse(cfg.ACME.Upstream)
-	if err != nil {
-		http.Error(w, "bad gateway", http.StatusBadGateway)
-		return
-	}
-	rp := &httputil.ReverseProxy{
-		Transport: p.transport,
-		Rewrite: func(pr *httputil.ProxyRequest) {
-			pr.SetURL(u)
-			pr.Out.Host = r.Host
-		},
-		ErrorHandler: func(rw http.ResponseWriter, _ *http.Request, err error) {
-			p.logs.Backend.Error("acme passthrough error", "error", err)
-			rw.WriteHeader(http.StatusBadGateway)
-		},
-		ErrorLog: p.discardLog,
-	}
-	rp.ServeHTTP(w, r)
 }
 
 // statusWriter records final status and bytes for metrics/access log,

@@ -2,10 +2,48 @@ package proxy
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"syscall"
 	"testing"
 )
+
+func TestSelfRedirectDetection(t *testing.T) {
+	req := httptest.NewRequest("GET", "https://www.petralito.it/", nil)
+	req.Host = "www.petralito.it"
+
+	// Absolute self-redirect (nginx force-SSL to the same URL) → loop.
+	resp := &http.Response{Header: http.Header{}}
+	resp.Header.Set("Location", "https://www.petralito.it/")
+	if !selfRedirect(resp, req, true) {
+		t.Fatal("absolute same-URL redirect must be detected as a loop")
+	}
+
+	// Relative self-redirect ("/") also resolves to the same URL.
+	resp.Header.Set("Location", "/")
+	if !selfRedirect(resp, req, true) {
+		t.Fatal("relative same-path redirect must be detected as a loop")
+	}
+
+	// Redirect to a different path is fine.
+	resp.Header.Set("Location", "https://www.petralito.it/login")
+	if selfRedirect(resp, req, true) {
+		t.Fatal("redirect to a different path must not be flagged")
+	}
+
+	// Redirect to another host is fine.
+	resp.Header.Set("Location", "https://other.example/")
+	if selfRedirect(resp, req, true) {
+		t.Fatal("redirect to another host must not be flagged")
+	}
+
+	// No Location: not a redirect loop.
+	resp.Header.Del("Location")
+	if selfRedirect(resp, req, true) {
+		t.Fatal("no Location must not be flagged")
+	}
+}
 
 func TestBindErrorHint(t *testing.T) {
 	// An address-in-use on a wildcard bind gets the public-IP hint.

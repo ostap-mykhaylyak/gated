@@ -438,6 +438,38 @@ func hostInList(host string, hosts []string) bool {
 	return false
 }
 
+// requestURL reconstructs the absolute URL the client requested.
+func requestURL(r *http.Request, secure bool) string {
+	scheme := "http"
+	if secure {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host + r.URL.RequestURI()
+}
+
+// selfRedirect reports whether a redirect response points back at the
+// exact URL that was just requested (scheme+host+path+query) — a loop
+// the client can never escape.
+func selfRedirect(resp *http.Response, r *http.Request, secure bool) bool {
+	loc := resp.Header.Get("Location")
+	if loc == "" {
+		return false
+	}
+	scheme := "http"
+	if secure {
+		scheme = "https"
+	}
+	base := &url.URL{Scheme: scheme, Host: r.Host, Path: r.URL.Path, RawQuery: r.URL.RawQuery}
+	u, err := url.Parse(loc)
+	if err != nil {
+		return false
+	}
+	abs := base.ResolveReference(u)
+	return abs.Scheme == base.Scheme &&
+		normalizeHost(abs.Host) == normalizeHost(base.Host) &&
+		abs.Path == base.Path && abs.RawQuery == base.RawQuery
+}
+
 // newRequestID returns a short random hex id used as the response
 // "Ray ID" and access-log correlation key.
 func newRequestID() string {
@@ -473,8 +505,20 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, b *balancer.Back
 			// still thinks the request was plaintext), upgrade the
 			// Location to https:// so the client does not bounce back
 			// into an endless redirect.
-			if secure && resp.StatusCode >= 300 && resp.StatusCode < 400 {
-				upgradeLocation(resp, hosts)
+			if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+				if secure {
+					upgradeLocation(resp, hosts)
+				}
+				// Surface a redirect loop: a backend that redirects to
+				// the exact URL just requested (e.g. nginx forcing
+				// http->https on the port gated proxies to) can never
+				// resolve. Log it so it is not a silent browser loop.
+				if selfRedirect(resp, r, secure) {
+					p.logs.Backend.Warn("backend redirect loop",
+						"url", requestURL(r, secure),
+						"location", resp.Header.Get("Location"),
+						"hint", "backend redirects to the same URL; if it forces HTTP->HTTPS, point the backend at its https:// port")
+				}
 			}
 			return nil
 		},

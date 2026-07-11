@@ -1,0 +1,21 @@
+# gated - minimal reverse-proxy virtual host.
+#
+# The bare minimum to put gated in front of a backend: a name, the
+# backend, and HTTPS redirect. Everything else (compression, health
+# checks, WAF, ...) inherits the global defaults. Copy to <name>.yaml
+# to activate.
+
+hosts: ["example.com", "www.example.com"]
+
+redirect_to_https: true
+
+# One line per backend: the url carries scheme + host + port. Use
+# https:// to reach a TLS backend (e.g. a local nginx on :443); the SNI
+# and certificate name are taken from this vhost's first host
+# automatically, so no backend_tls is needed for the common case.
+backends:
+  - url: "https://127.0.0.1:443"
+
+# Optional, only if the backend uses a self-signed certificate:
+# backend_tls:
+#   insecure_skip_verify: true

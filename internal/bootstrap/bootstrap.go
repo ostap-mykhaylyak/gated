@@ -28,7 +28,7 @@ var UnitFile []byte
 // skel source paths inside the embedded FS.
 const (
 	skelConfig    = "skel/etc/gated/config.yaml"
-	skelVhost     = "skel/etc/gated/vhosts/example.com.yaml.example"
+	skelVhostDir  = "skel/etc/gated/vhosts"
 	skelWAFDir    = "skel/etc/gated/waf"
 	skelAllowDir  = "skel/etc/gated/allow"
 	skelDenyDir   = "skel/etc/gated/deny"
@@ -51,13 +51,10 @@ func EnsureLayout(out io.Writer) error {
 	if created {
 		fmt.Fprintf(out, "gated: installed default config at %s\n", paths.ConfigFile)
 	}
-	example := filepath.Join(paths.VhostsDir, "example.com.yaml.example")
-	if _, err := installIfMissing(skelVhost, example, 0o640); err != nil {
-		return err
-	}
 	// Install the starter files of each skel directory (without
 	// overwriting operator edits).
 	for _, d := range []struct{ src, dst string }{
+		{skelVhostDir, paths.VhostsDir},
 		{skelWAFDir, paths.WAFDir},
 		{skelAllowDir, paths.AllowDir},
 		{skelDenyDir, paths.DenyDir},

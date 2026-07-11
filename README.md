@@ -17,6 +17,10 @@ point of the server, in front of any service.
   cert name and can accept self-signed backend certs. `backend_protocol`
   picks the upstream wire protocol: `auto` (HTTP/2 over TLS via ALPN,
   h1 fallback — fast for remote backends), `http1`, or `http3` (QUIC).
+  By default gated **preserves the request scheme** to the backend
+  (HTTP→`http://` backend, HTTPS→`https://` backend), so the origin/CMS
+  decides redirects; set `redirect_to_https: true` to force it at the
+  edge instead.
 - **Path routing, rewrites and canary/blue-green** per vhost: match by
   path prefix or regex (and method) to a route's own backends, strip a
   prefix or regex-rewrite the path, and split a weighted share (or by

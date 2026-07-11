@@ -519,6 +519,42 @@ func TestHTTP2Backend(t *testing.T) {
 	}
 }
 
+func TestSchemePreservingBackends(t *testing.T) {
+	// Two backends, one per scheme: gated must route each request to the
+	// backend matching its scheme, so the origin decides redirects.
+	httpBk := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "http-backend")
+	}))
+	defer httpBk.Close()
+	httpsBk := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "https-backend")
+	}))
+	defer httpsBk.Close()
+
+	vh := "hosts: [\"app.test\"]\nredirect_to_https: false\n" +
+		"backend_tls:\n  insecure_skip_verify: true\n" +
+		"backends:\n  - url: \"" + httpBk.URL + "\"\n  - url: \"" + httpsBk.URL + "\"\n"
+	p := newTestProxy(t, "{}\n", map[string]string{"app.yaml": vh})
+
+	// HTTP request -> http backend.
+	req := httptest.NewRequest("GET", "http://app.test/", nil)
+	req.Host = "app.test"
+	rec := httptest.NewRecorder()
+	p.Handler(false).ServeHTTP(rec, req)
+	if rec.Body.String() != "http-backend" {
+		t.Fatalf("http request served by %q, want http-backend", rec.Body.String())
+	}
+
+	// HTTPS request -> https backend.
+	req = httptest.NewRequest("GET", "https://app.test/", nil)
+	req.Host = "app.test"
+	rec = httptest.NewRecorder()
+	p.Handler(true).ServeHTTP(rec, req)
+	if rec.Body.String() != "https-backend" {
+		t.Fatalf("https request served by %q, want https-backend", rec.Body.String())
+	}
+}
+
 func TestUnknownHost404(t *testing.T) {
 	p := newTestProxy(t, "{}\n", nil)
 	req := httptest.NewRequest("GET", "http://nobody.test/", nil)
@@ -532,7 +568,7 @@ func TestUnknownHost404(t *testing.T) {
 
 func TestRedirectToHTTPS(t *testing.T) {
 	p := newTestProxy(t, "{}\n", map[string]string{
-		"app.yaml": "hosts: [\"app.test\"]\nbackends:\n  - url: \"http://127.0.0.1:9\"\n", // redirect defaults to true
+		"app.yaml": "hosts: [\"app.test\"]\nredirect_to_https: true\nbackends:\n  - url: \"http://127.0.0.1:9\"\n",
 	})
 	req := httptest.NewRequest("GET", "http://app.test/x?y=1", nil)
 	req.Host = "app.test"

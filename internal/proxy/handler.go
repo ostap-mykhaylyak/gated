@@ -295,8 +295,12 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 		// Balancer + retries: a transport-level failure on a
 		// replayable request (no body consumed, nothing written to the
 		// client) moves on to the next backend.
+		reqScheme := "http"
+		if secure {
+			reqScheme = "https"
+		}
 		for attempt := 0; attempt < len(pool.Backends()); attempt++ {
-			b := pool.Pick(r, clientIP)
+			b := pool.Pick(r, clientIP, reqScheme)
 			if b == nil {
 				failed = true
 				p.pages.Message(cw, pages.MessageData{

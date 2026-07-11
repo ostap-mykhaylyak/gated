@@ -27,13 +27,6 @@ tls:
   letsencrypt_dir: "/etc/letsencrypt/live"
   min_version: "1.2"            # "1.2" or "1.3"
 
-# ACME/Let's Encrypt: gated reads certificates from tls.letsencrypt_dir
-# and never issues them. HTTP-01 renewals reach the backend (e.g. nginx)
-# through the vhost itself, so no special handling is needed. If you want
-# gated to forward /.well-known/acme-challenge/ to a fixed upstream
-# regardless of vhost routing, add:
-#   acme: { passthrough: true, upstream: "http://127.0.0.1:80" }
-
 proxy:
   # CIDRs (or single IPs) whose real_ip_header is trusted for client
   # IP resolution. Invalid entries are skipped with a warning.

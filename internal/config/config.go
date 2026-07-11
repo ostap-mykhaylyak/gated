@@ -8,7 +8,6 @@ package config
 import (
 	"fmt"
 	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,7 +47,6 @@ func (d Duration) Std() time.Duration { return time.Duration(d) }
 type Config struct {
 	Entrypoints Entrypoints `yaml:"entrypoints"`
 	TLS         TLS         `yaml:"tls"`
-	ACME        ACME        `yaml:"acme"`
 	Proxy       Proxy       `yaml:"proxy"`
 	Compression Compression `yaml:"compression"`
 	Health      Health      `yaml:"health"`
@@ -87,13 +85,6 @@ type HTTPSEntrypoint struct {
 type TLS struct {
 	LetsEncryptDir string `yaml:"letsencrypt_dir"`
 	MinVersion     string `yaml:"min_version"` // "1.2" or "1.3"
-}
-
-// ACME configures the passthrough of HTTP-01 challenges to the local
-// nginx, which owns certificate issuance/renewal on this server.
-type ACME struct {
-	Passthrough bool   `yaml:"passthrough"`
-	Upstream    string `yaml:"upstream"`
 }
 
 // Proxy holds global proxying behavior.
@@ -194,13 +185,6 @@ func Default() *Config {
 			LetsEncryptDir: paths.LetsEncryptDir,
 			MinVersion:     "1.2",
 		},
-		ACME: ACME{
-			// Off by default: HTTP-01 renewals reach the backend through
-			// the vhost. Opt in only to forward challenges to a fixed
-			// upstream regardless of vhost routing.
-			Passthrough: false,
-			Upstream:    "http://127.0.0.1:80",
-		},
 		Proxy: Proxy{
 			RealIPHeader:      "X-Forwarded-For",
 			ReadHeaderTimeout: Duration(10 * time.Second),
@@ -286,13 +270,6 @@ func (c *Config) validate() error {
 	}
 	if c.TLS.LetsEncryptDir == "" {
 		return fmt.Errorf("tls.letsencrypt_dir is required")
-	}
-
-	if c.ACME.Passthrough {
-		u, err := url.Parse(c.ACME.Upstream)
-		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-			return fmt.Errorf("acme.upstream must be a valid http(s) URL, got %q", c.ACME.Upstream)
-		}
 	}
 
 	// Invalid trusted_proxies entries are skipped with a warning: a bad

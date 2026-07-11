@@ -681,7 +681,7 @@ func applyCORS(w http.ResponseWriter, r *http.Request, c vhost.CORS) bool {
 	h := w.Header()
 	h.Set("Access-Control-Allow-Origin", allow)
 	if allow != "*" {
-		h.Add("Vary", "Origin")
+		compress.AddVary(h, "Origin")
 	}
 	if c.AllowCredentials {
 		h.Set("Access-Control-Allow-Credentials", "true")

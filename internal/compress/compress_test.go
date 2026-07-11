@@ -3,6 +3,7 @@ package compress
 import (
 	"compress/gzip"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -89,5 +90,29 @@ func TestSkipSmallAndBinary(t *testing.T) {
 	finish()
 	if got := rec.Header().Get("Content-Encoding"); got != "br" {
 		t.Fatalf("pre-encoded response must pass through, got %q", got)
+	}
+}
+
+func TestAddVaryIdempotent(t *testing.T) {
+	h := http.Header{}
+	AddVary(h, "Accept-Encoding")
+	AddVary(h, "Accept-Encoding") // repeat: must not duplicate
+	AddVary(h, "accept-encoding") // case-insensitive: still no duplicate
+	if got := h.Values("Vary"); len(got) != 1 || got[0] != "Accept-Encoding" {
+		t.Fatalf("Vary = %v, want a single Accept-Encoding", got)
+	}
+
+	// A backend that already listed the token (with others) is respected.
+	h2 := http.Header{}
+	h2.Set("Vary", "Cookie, Accept-Encoding")
+	AddVary(h2, "Accept-Encoding")
+	if got := h2.Values("Vary"); len(got) != 1 {
+		t.Fatalf("must not add a duplicate line, got %v", got)
+	}
+
+	// A different token is appended.
+	AddVary(h2, "Origin")
+	if len(h2.Values("Vary")) != 2 {
+		t.Fatalf("Origin must be added, got %v", h2.Values("Vary"))
 	}
 }

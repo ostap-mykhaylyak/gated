@@ -3,6 +3,7 @@ package vhost
 import (
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -103,6 +104,44 @@ func TestInheritedDefaults(t *testing.T) {
 	}
 	if v.BackendProtocol != "auto" || v.Transport == nil {
 		t.Fatalf("backend protocol default/transport wrong: %q %v", v.BackendProtocol, v.Transport)
+	}
+}
+
+func TestAutoBackendSNI(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	s := NewStore(dir, discard)
+
+	// https backend by IP, no backend_tls.server_name: gated must
+	// default the SNI to the vhost's first host.
+	write(t, dir, "site.yaml", "hosts: [\"petralito.it\", \"www.petralito.it\"]\nbackends:\n  - url: \"https://127.0.0.1:443\"\n")
+	s.LoadAll(cfg)
+	v := s.Lookup("www.petralito.it")
+	if v == nil {
+		t.Fatal("vhost not loaded")
+	}
+	tr, ok := v.Transport.(*http.Transport)
+	if !ok || tr.TLSClientConfig == nil {
+		t.Fatalf("expected an *http.Transport with TLS config, got %T", v.Transport)
+	}
+	if tr.TLSClientConfig.ServerName != "petralito.it" {
+		t.Fatalf("auto SNI = %q, want petralito.it", tr.TLSClientConfig.ServerName)
+	}
+
+	// http backend by IP: no TLS config forced.
+	write(t, dir, "plain.yaml", "hosts: [\"plain.test\"]\nbackends:\n  - url: \"http://127.0.0.1:8080\"\n")
+	s.LoadAll(cfg)
+	pv := s.Lookup("plain.test")
+	if ptr, _ := pv.Transport.(*http.Transport); ptr != nil && ptr.TLSClientConfig != nil && ptr.TLSClientConfig.ServerName != "" {
+		t.Fatal("http backend must not get an auto SNI")
+	}
+
+	// https backend by hostname: keep Go's default (no forced SNI).
+	write(t, dir, "named.yaml", "hosts: [\"named.test\"]\nbackends:\n  - url: \"https://origin.internal:443\"\n")
+	s.LoadAll(cfg)
+	nv := s.Lookup("named.test")
+	if ntr, _ := nv.Transport.(*http.Transport); ntr != nil && ntr.TLSClientConfig != nil {
+		t.Fatalf("hostname backend must keep Go default SNI, got %q", ntr.TLSClientConfig.ServerName)
 	}
 }
 

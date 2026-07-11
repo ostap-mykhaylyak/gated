@@ -47,14 +47,16 @@ func serveFromCache(w http.ResponseWriter, e *cache.Entry) {
 	w.Write(e.Body)
 }
 
-// ttlFor decides how long a response may be cached, or 0 = do not cache.
-// Backend Cache-Control wins; otherwise the vhost TTL, or the micro-TTL
-// for HTML.
-func ttlFor(resp http.Header, status int, c *vhost.Cache) time.Duration {
+// ttlFor decides how long a response for reqPath may be cached, or
+// 0 = do not cache. no-store / private / Set-Cookie always prevent
+// caching; otherwise the vhost's cache rules (or legacy TTLs) decide.
+// no-cache does NOT block a rule/micro-TTL — that is the point of a
+// short edge cache in front of a "no-cache" CMS.
+func ttlFor(reqPath string, resp http.Header, status int, c *vhost.Cache) time.Duration {
 	if !c.CacheableStatusOK(status) {
 		return 0
 	}
-	// User-specific or explicitly uncacheable responses are never stored.
+	// User-specific or explicitly non-storable responses are never stored.
 	if resp.Get("Set-Cookie") != "" {
 		return 0
 	}
@@ -63,16 +65,14 @@ func ttlFor(resp http.Header, status int, c *vhost.Cache) time.Duration {
 		return 0
 	}
 	cc := strings.ToLower(resp.Get("Cache-Control"))
-	if strings.Contains(cc, "no-store") || strings.Contains(cc, "no-cache") || strings.Contains(cc, "private") {
+	if strings.Contains(cc, "no-store") || strings.Contains(cc, "private") {
 		return 0
 	}
-	if d, ok := maxAge(cc); ok {
-		return d
+	d, hasMaxAge := maxAge(cc)
+	if strings.Contains(cc, "no-cache") {
+		hasMaxAge = false // ignore any max-age; let a rule/micro-TTL apply
 	}
-	if c.MicroTTL.Std() > 0 && strings.HasPrefix(resp.Get("Content-Type"), "text/html") {
-		return c.MicroTTL.Std()
-	}
-	return c.TTL.Std()
+	return c.TTLFor(reqPath, resp.Get("Content-Type"), hasMaxAge, d)
 }
 
 // maxAge parses "max-age=N" (or "s-maxage=N") from a Cache-Control value.
@@ -130,11 +130,11 @@ func (cw *cacheWriter) Unwrap() http.ResponseWriter { return cw.ResponseWriter }
 
 // entryFrom builds a cache entry from a completed cacheWriter, or nil
 // when the response should not be stored.
-func entryFrom(cw *cacheWriter, respHeader http.Header, c *vhost.Cache) *cache.Entry {
+func entryFrom(cw *cacheWriter, respHeader http.Header, reqPath string, c *vhost.Cache) *cache.Entry {
 	if cw.overflow {
 		return nil
 	}
-	ttl := ttlFor(respHeader, cw.status, c)
+	ttl := ttlFor(reqPath, respHeader, cw.status, c)
 	if ttl <= 0 {
 		return nil
 	}

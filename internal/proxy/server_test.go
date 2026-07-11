@@ -20,6 +20,34 @@ func TestCertHint(t *testing.T) {
 	}
 }
 
+func TestIsNavigation(t *testing.T) {
+	nav := func(secFetch, accept string) bool {
+		r := httptest.NewRequest("GET", "/", nil)
+		if secFetch != "" {
+			r.Header.Set("Sec-Fetch-Dest", secFetch)
+		}
+		if accept != "" {
+			r.Header.Set("Accept", accept)
+		}
+		return isNavigation(r)
+	}
+	if !nav("document", "") {
+		t.Fatal("Sec-Fetch-Dest: document must be a navigation")
+	}
+	if nav("image", "") {
+		t.Fatal("an image sub-resource must not be a navigation")
+	}
+	if nav("style", "text/css,*/*;q=0.1") {
+		t.Fatal("a style sub-resource must not be a navigation")
+	}
+	if !nav("", "text/html,application/xhtml+xml,application/xml;q=0.9") {
+		t.Fatal("no Sec-Fetch + Accept text/html must be a navigation")
+	}
+	if nav("", "image/avif,image/webp,image/apng,*/*") {
+		t.Fatal("no Sec-Fetch + image Accept must not be a navigation")
+	}
+}
+
 func TestSelfRedirectDetection(t *testing.T) {
 	req := httptest.NewRequest("GET", "https://www.petralito.it/", nil)
 	req.Host = "www.petralito.it"

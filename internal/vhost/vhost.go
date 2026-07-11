@@ -197,18 +197,64 @@ func (r *Route) RewritePath(path string) string {
 	return path
 }
 
+// CacheRule assigns a TTL to responses matching a request path suffix
+// and/or a response Content-Type. An empty Extensions means "any path";
+// an empty ContentTypes means "any type". The TTL wins over the
+// backend's Cache-Control max-age (but no-store/private/Set-Cookie
+// still prevent caching).
+type CacheRule struct {
+	Extensions   []string        `yaml:"extensions"`    // path suffix, e.g. [".jpg", ".css"]
+	ContentTypes []string        `yaml:"content_types"` // response Content-Type prefix, e.g. ["text/html"]
+	TTL          config.Duration `yaml:"ttl"`
+
+	exts []string // normalized (lowercased, dot-prefixed)
+}
+
 // Cache is the per-vhost response-cache policy.
 type Cache struct {
-	Enabled         bool            `yaml:"enabled"`
-	TTL             config.Duration `yaml:"ttl"`              // fallback TTL when the backend sets no Cache-Control max-age
-	MicroTTL        config.Duration `yaml:"micro_ttl"`        // short TTL for text/html without Cache-Control (spike shield)
-	Extensions      []string        `yaml:"extensions"`       // if set, cache ONLY paths ending in one of these (CDN mode)
-	MaxObjectSize   int64           `yaml:"max_object_size"`  // largest response cached; default 5 MiB
-	CacheableStatus []int           `yaml:"cacheable_status"` // default [200]
-	BypassCookies   []string        `yaml:"bypass_cookies"`   // request cookie name prefixes that skip the cache
+	Enabled bool `yaml:"enabled"`
+	// Rules give per-bucket TTLs (e.g. static assets 30d, pages 5m); the
+	// first matching rule wins. When empty, the legacy TTL/MicroTTL/
+	// Extensions fields below apply instead.
+	Rules []CacheRule `yaml:"rules"`
+
+	// Legacy flat policy (used only when Rules is empty).
+	TTL        config.Duration `yaml:"ttl"`
+	MicroTTL   config.Duration `yaml:"micro_ttl"`
+	Extensions []string        `yaml:"extensions"`
+
+	MaxObjectSize   int64    `yaml:"max_object_size"`  // largest response cached; default 5 MiB
+	CacheableStatus []int    `yaml:"cacheable_status"` // default [200]
+	BypassCookies   []string `yaml:"bypass_cookies"`   // request cookie name prefixes that skip the cache
 
 	statusOK map[int]bool `yaml:"-"`
-	exts     []string     `yaml:"-"` // normalized (lowercased, dot-prefixed) suffixes
+	exts     []string     `yaml:"-"` // normalized legacy Extensions
+}
+
+// normalizeExts lowercases and dot-prefixes a list of suffixes.
+func normalizeExts(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, e := range in {
+		e = strings.ToLower(strings.TrimSpace(e))
+		if e == "" {
+			continue
+		}
+		if !strings.HasPrefix(e, ".") {
+			e = "." + e
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+func matchExt(exts []string, path string) bool {
+	lp := strings.ToLower(path)
+	for _, e := range exts {
+		if strings.HasSuffix(lp, e) {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveCache fills the cache policy defaults after parsing.
@@ -226,30 +272,63 @@ func (v *VHost) resolveCache() {
 	for _, s := range v.Cache.CacheableStatus {
 		v.Cache.statusOK[s] = true
 	}
-	// Normalize extension filters: lowercase, ensure a leading dot.
-	v.Cache.exts = v.Cache.exts[:0]
-	for _, e := range v.Cache.Extensions {
-		e = strings.ToLower(strings.TrimSpace(e))
-		if e == "" {
-			continue
-		}
-		if !strings.HasPrefix(e, ".") {
-			e = "." + e
-		}
-		v.Cache.exts = append(v.Cache.exts, e)
+	v.Cache.exts = normalizeExts(v.Cache.Extensions)
+	for i := range v.Cache.Rules {
+		v.Cache.Rules[i].exts = normalizeExts(v.Cache.Rules[i].Extensions)
 	}
 }
 
-// PathEligible reports whether path may be cached under the extension
-// filter: true for every path when no extensions are configured, else
-// only when the path ends in one of them (CDN-style static caching).
+// PathEligible reports whether path could be cached at all (checked at
+// request time, before the backend). It is true when some rule could
+// apply to the path, or — in legacy mode — when the extension filter
+// (if any) matches.
 func (c *Cache) PathEligible(path string) bool {
+	if len(c.Rules) > 0 {
+		for _, r := range c.Rules {
+			// A rule with no path filter may still match by content-type
+			// once the response arrives, so it keeps the path eligible.
+			if len(r.exts) == 0 || matchExt(r.exts, path) {
+				return true
+			}
+		}
+		return false
+	}
 	if len(c.exts) == 0 {
 		return true
 	}
-	lp := strings.ToLower(path)
-	for _, e := range c.exts {
-		if strings.HasSuffix(lp, e) {
+	return matchExt(c.exts, path)
+}
+
+// TTLFor returns how long a response for path with the given
+// Content-Type may be cached (0 = do not store). Rules win over the
+// backend's max-age; legacy mode falls back to micro_ttl/ttl.
+func (c *Cache) TTLFor(path, contentType string, hasMaxAge bool, maxAge time.Duration) time.Duration {
+	if len(c.Rules) > 0 {
+		ct := strings.ToLower(contentType)
+		for _, r := range c.Rules {
+			if len(r.exts) > 0 && !matchExt(r.exts, path) {
+				continue
+			}
+			if len(r.ContentTypes) > 0 && !matchesContentType(r.ContentTypes, ct) {
+				continue
+			}
+			return r.TTL.Std()
+		}
+		return 0
+	}
+	// Legacy: backend max-age wins, else micro-TTL for HTML, else TTL.
+	if hasMaxAge {
+		return maxAge
+	}
+	if c.MicroTTL.Std() > 0 && strings.HasPrefix(strings.ToLower(contentType), "text/html") {
+		return c.MicroTTL.Std()
+	}
+	return c.TTL.Std()
+}
+
+func matchesContentType(prefixes []string, ct string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(ct, strings.ToLower(strings.TrimSpace(p))) {
 			return true
 		}
 	}

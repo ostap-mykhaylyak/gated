@@ -2,6 +2,8 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -517,6 +519,63 @@ func TestHTTP2Backend(t *testing.T) {
 	}
 	if got := rec.Header().Get("X-Backend-Proto"); got != "HTTP/2.0" {
 		t.Fatalf("backend saw %q, want HTTP/2.0 (h2 not negotiated end-to-end)", got)
+	}
+}
+
+func TestCacheDoesNotCorruptCompressible(t *testing.T) {
+	js := "var x = 1; /* a fairly long javascript body to be compressed */ " +
+		"function f(){ return 42; } " + strings.Repeat("// filler line\n", 200)
+
+	// A backend that compresses when the client offers gzip (like nginx).
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript")
+		w.Header().Set("Cache-Control", "max-age=300")
+		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			w.Header().Set("Content-Encoding", "gzip")
+			gz := gzip.NewWriter(w)
+			io.WriteString(gz, js)
+			gz.Close()
+			return
+		}
+		io.WriteString(w, js)
+	}))
+	defer backend.Close()
+
+	global := "compression:\n  enabled: true\n  algorithms: [gzip]\n  min_size: 0\n"
+	vh := "hosts: [\"app.test\"]\nredirect_to_https: false\ncache:\n  enabled: true\n  ttl: 5m\nbackends:\n  - url: \"" + backend.URL + "\"\n"
+	p := newTestProxy(t, global, map[string]string{"app.yaml": vh})
+
+	get := func() (int, string, string) {
+		req := httptest.NewRequest("GET", "http://app.test/app.js", nil)
+		req.Host = "app.test"
+		req.Header.Set("Accept-Encoding", "gzip")
+		rec := httptest.NewRecorder()
+		p.Handler(false).ServeHTTP(rec, req)
+		body := rec.Body.Bytes()
+		if rec.Header().Get("Content-Encoding") == "gzip" {
+			zr, err := gzip.NewReader(bytes.NewReader(body))
+			if err != nil {
+				t.Fatalf("response not valid gzip: %v", err)
+			}
+			dec, _ := io.ReadAll(zr)
+			body = dec
+		}
+		return rec.Code, rec.Header().Get("X-Cache"), string(body)
+	}
+
+	// First request: MISS. Body must decode to the exact JS.
+	code, xc, got := get()
+	if code != 200 || got != js {
+		t.Fatalf("MISS corrupted body: code=%d xcache=%s len=%d", code, xc, len(got))
+	}
+	// Second request: HIT. Must still decode to the exact JS (this is the
+	// case that broke: cache served compressed bytes without the header).
+	code, xc, got = get()
+	if xc != "HIT" {
+		t.Fatalf("expected a cache HIT, got %q", xc)
+	}
+	if code != 200 || got != js {
+		t.Fatalf("HIT corrupted body: code=%d len=%d", code, len(got))
 	}
 }
 

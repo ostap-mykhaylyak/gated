@@ -537,6 +537,13 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, b *balancer.Back
 			// detect HTTPS and avoid the "force SSL" redirect loop.
 			pr.Out.Header.Set("X-Forwarded-Ssl", sslOn)
 			pr.Out.Header.Set("X-Forwarded-Port", fwdPort)
+			// Ask the backend for an UNCOMPRESSED body: gated is the sole
+			// compressor (per client), and the cache must store a single
+			// uncompressed representation. Forwarding the client's
+			// Accept-Encoding would make the backend compress, and the
+			// cache would then serve compressed bytes without the
+			// Content-Encoding header — corrupting JS/CSS on a hit.
+			pr.Out.Header.Del("Accept-Encoding")
 		},
 		ErrorHandler: func(_ http.ResponseWriter, _ *http.Request, err error) {
 			// Record only: the caller decides (retry / 502). Nothing

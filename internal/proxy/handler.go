@@ -339,8 +339,8 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 			}
 
 			err, wrote := p.forward(backendW, r, b, clientIP, secure, issueVisit, v.Transport, v.Hosts)
-			pool.Report(b, err == nil)
 			if err == nil {
+				pool.Report(b, true)
 				if capture != nil {
 					if e := entryFrom(capture, cw.Header(), &v.Cache); e != nil {
 						p.cache.Set(cacheStoreKey, e)
@@ -348,6 +348,18 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 				}
 				return
 			}
+			if errors.Is(err, context.Canceled) {
+				// The client disconnected before the backend replied
+				// (e.g. it navigated away from a slow page). That is not
+				// a backend failure: leave the pool health untouched —
+				// otherwise a few slow, client-abandoned requests wrongly
+				// mark the backend down — and don't log it as an error.
+				p.logs.Backend.Info("request canceled by client", "ray_id", reqID,
+					"host", host, "backend", backendURL)
+				return
+			}
+			// A genuine backend failure counts against its health.
+			pool.Report(b, false)
 			if hint := certHint(err); hint != "" {
 				p.logs.Backend.Error("backend error", "ray_id", reqID,
 					"host", host, "backend", backendURL, "error", err, "hint", hint)
@@ -355,7 +367,7 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 				p.logs.Backend.Error("backend error", "ray_id", reqID,
 					"host", host, "backend", backendURL, "error", err)
 			}
-			if wrote || errors.Is(err, context.Canceled) || r.ContentLength != 0 {
+			if wrote || r.ContentLength != 0 {
 				failed = true
 				return
 			}

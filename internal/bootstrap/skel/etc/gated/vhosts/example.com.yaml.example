@@ -107,15 +107,19 @@ headers:                   # per-vhost header mutations (optional)
 
 cache:                     # response cache (optional; off by default)
   enabled: false
-  # Backend Cache-Control (max-age) wins. Otherwise:
-  #   ttl:       fallback cache time for cacheable responses
-  #   micro_ttl: short cache for text/html without Cache-Control (spike shield)
-  ttl: 1h
-  micro_ttl: 0
-  # extensions: CDN mode. When set, ONLY GET responses whose path ends
-  # in one of these are cached (leading dot optional, case-insensitive).
-  # Leave empty to fall back to Cache-Control / micro_ttl caching.
-  extensions: [".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".svg", ".ico", ".woff", ".woff2", ".ttf", ".otf", ".css", ".js", ".mp4", ".webm"]
+  # rules: per-bucket TTLs, first match wins. Match by request-path
+  # `extensions` (suffix) and/or response `content_types` (prefix). The
+  # rule TTL wins over the backend's Cache-Control, and a page rule even
+  # caches a "no-cache" CMS page briefly (micro-cache). A response that
+  # matches no rule is never cached (e.g. JSON APIs below).
+  rules:
+    # Static assets: 30 days.
+    - extensions: [".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".svg", ".ico", ".woff", ".woff2", ".ttf", ".otf", ".css", ".js", ".mp4", ".webm"]
+      ttl: 720h
+    # HTML pages: 5 minutes (anonymous only — see bypass_cookies).
+    - content_types: ["text/html"]
+      ttl: 5m
+  # (Legacy alternative to `rules`: flat `ttl` + `micro_ttl` + `extensions`.)
   max_object_size: 10485760          # 10 MiB: skip caching a single response larger than this
   cacheable_status: [200]
   # Requests with these cookie-name prefixes bypass the cache (logged-in

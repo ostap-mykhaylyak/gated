@@ -219,9 +219,12 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 		// the connection: skip Early Hints and compression for them.
 		upgrade := isUpgradeRequest(r)
 
-		// 103 Early Hints, sent before contacting the backend. The
-		// Link headers intentionally remain on the final response too.
-		if len(v.EarlyHints) > 0 && !upgrade {
+		// 103 Early Hints, sent before contacting the backend — but only
+		// for top-level navigations (HTML documents). A sub-resource
+		// request (image, css, js, font opened directly) must not receive
+		// the page's preload hints. The Link headers stay on the final
+		// response too.
+		if len(v.EarlyHints) > 0 && !upgrade && isNavigation(r) {
 			for _, hint := range v.EarlyHints {
 				sw.Header().Add("Link", hint)
 			}
@@ -242,7 +245,7 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 		// Response cache: on a cacheable request, serve a live hit
 		// directly (after the WAF, so bans/limits still apply). On a
 		// miss, remember the key to store the response below.
-		var cacheStoreKey string
+		var cacheStoreKey, cacheReqPath string
 		if v.Cache.Enabled && !upgrade && cacheableRequest(r, &v.Cache) {
 			key := cacheKey(r, host)
 			if e, ok := p.cache.Get(key); ok {
@@ -254,6 +257,7 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 			}
 			p.m.CacheMiss()
 			cacheStoreKey = key
+			cacheReqPath = r.URL.Path // original path, before any route rewrite
 		}
 
 		// Path routing: pick the matching route's pool (or a canary
@@ -342,7 +346,7 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 			if err == nil {
 				pool.Report(b, true)
 				if capture != nil {
-					if e := entryFrom(capture, cw.Header(), &v.Cache); e != nil {
+					if e := entryFrom(capture, cw.Header(), cacheReqPath, &v.Cache); e != nil {
 						p.cache.Set(cacheStoreKey, e)
 					}
 				}
@@ -718,6 +722,23 @@ func corsAllowedOrigin(origin string, allow []string, credentials bool) string {
 		}
 	}
 	return ""
+}
+
+// isNavigation reports whether the request is a top-level document load
+// (a page navigation) rather than a sub-resource fetch — so Early Hints
+// only go out where they help. Uses Sec-Fetch-Dest when present, else
+// falls back to the Accept header.
+func isNavigation(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Dest") {
+	case "document":
+		return true
+	case "":
+		// Older clients without Fetch Metadata: a navigation asks for HTML.
+		return strings.Contains(r.Header.Get("Accept"), "text/html")
+	default:
+		// image, style, script, font, empty (XHR/fetch), ...
+		return false
+	}
 }
 
 // isUpgradeRequest reports whether the request asks to switch protocol

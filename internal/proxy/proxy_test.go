@@ -579,6 +579,52 @@ func TestCacheDoesNotCorruptCompressible(t *testing.T) {
 	}
 }
 
+func TestCacheRulesPerBucket(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, ".css"):
+			w.Header().Set("Content-Type", "text/css")
+		case strings.HasPrefix(r.URL.Path, "/api"):
+			w.Header().Set("Content-Type", "application/json")
+		default:
+			w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+			w.Header().Set("Cache-Control", "no-cache") // WordPress-style
+		}
+		io.WriteString(w, "body")
+	}))
+	defer backend.Close()
+
+	// Static assets 30d, HTML pages 5m, JSON API not cached.
+	vh := "hosts: [\"app.test\"]\nredirect_to_https: false\n" +
+		"cache:\n  enabled: true\n  rules:\n" +
+		"    - extensions: [\".css\", \".js\"]\n      ttl: 720h\n" +
+		"    - content_types: [\"text/html\"]\n      ttl: 5m\n" +
+		"backends:\n  - url: \"" + backend.URL + "\"\n"
+	p := newTestProxy(t, "{}\n", map[string]string{"app.yaml": vh})
+
+	xcache := func(path string) string {
+		req := httptest.NewRequest("GET", "http://app.test"+path, nil)
+		req.Host = "app.test"
+		rec := httptest.NewRecorder()
+		p.Handler(false).ServeHTTP(rec, req)
+		return rec.Header().Get("X-Cache")
+	}
+
+	// .css → cached (static bucket).
+	if xcache("/a.css") != "MISS" || xcache("/a.css") != "HIT" {
+		t.Fatal(".css must be cached (static rule)")
+	}
+	// HTML page (Cache-Control: no-cache) → cached anyway by the page rule.
+	if xcache("/page") != "MISS" || xcache("/page") != "HIT" {
+		t.Fatal("HTML page must be micro-cached despite no-cache")
+	}
+	// JSON API → matches no rule → never stored, so never a HIT.
+	xcache("/api/x")
+	if got := xcache("/api/x"); got == "HIT" {
+		t.Fatalf("API must never be served from cache, got %q", got)
+	}
+}
+
 func TestCacheExtensionFilter(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")

@@ -202,11 +202,13 @@ type Cache struct {
 	Enabled         bool            `yaml:"enabled"`
 	TTL             config.Duration `yaml:"ttl"`              // fallback TTL when the backend sets no Cache-Control max-age
 	MicroTTL        config.Duration `yaml:"micro_ttl"`        // short TTL for text/html without Cache-Control (spike shield)
-	MaxObjectBytes  int64           `yaml:"max_object_bytes"` // largest response cached; default 5 MiB
+	Extensions      []string        `yaml:"extensions"`       // if set, cache ONLY paths ending in one of these (CDN mode)
+	MaxObjectSize   int64           `yaml:"max_object_size"`  // largest response cached; default 5 MiB
 	CacheableStatus []int           `yaml:"cacheable_status"` // default [200]
 	BypassCookies   []string        `yaml:"bypass_cookies"`   // request cookie name prefixes that skip the cache
 
 	statusOK map[int]bool `yaml:"-"`
+	exts     []string     `yaml:"-"` // normalized (lowercased, dot-prefixed) suffixes
 }
 
 // resolveCache fills the cache policy defaults after parsing.
@@ -214,8 +216,8 @@ func (v *VHost) resolveCache() {
 	if !v.Cache.Enabled {
 		return
 	}
-	if v.Cache.MaxObjectBytes <= 0 {
-		v.Cache.MaxObjectBytes = 5 * 1024 * 1024
+	if v.Cache.MaxObjectSize <= 0 {
+		v.Cache.MaxObjectSize = 5 * 1024 * 1024
 	}
 	if len(v.Cache.CacheableStatus) == 0 {
 		v.Cache.CacheableStatus = []int{200}
@@ -224,6 +226,34 @@ func (v *VHost) resolveCache() {
 	for _, s := range v.Cache.CacheableStatus {
 		v.Cache.statusOK[s] = true
 	}
+	// Normalize extension filters: lowercase, ensure a leading dot.
+	v.Cache.exts = v.Cache.exts[:0]
+	for _, e := range v.Cache.Extensions {
+		e = strings.ToLower(strings.TrimSpace(e))
+		if e == "" {
+			continue
+		}
+		if !strings.HasPrefix(e, ".") {
+			e = "." + e
+		}
+		v.Cache.exts = append(v.Cache.exts, e)
+	}
+}
+
+// PathEligible reports whether path may be cached under the extension
+// filter: true for every path when no extensions are configured, else
+// only when the path ends in one of them (CDN-style static caching).
+func (c *Cache) PathEligible(path string) bool {
+	if len(c.exts) == 0 {
+		return true
+	}
+	lp := strings.ToLower(path)
+	for _, e := range c.exts {
+		if strings.HasSuffix(lp, e) {
+			return true
+		}
+	}
+	return false
 }
 
 // CacheableStatusOK reports whether status may be cached for this vhost.

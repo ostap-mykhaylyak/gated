@@ -119,9 +119,11 @@ type GeoIP struct {
 }
 
 // Cache configures the shared in-memory response cache. It is always
-// allocated; a vhost opts in via its own cache section.
+// allocated; a vhost opts in via its own cache section. The store is
+// LRU-bounded by total bytes and, optionally, by object count.
 type Cache struct {
 	MaxSizeBytes int64 `yaml:"max_size_bytes"`
+	MaxEntries   int   `yaml:"max_entries"` // LRU object cap; 0 = unlimited count
 }
 
 // WAF configures the web application firewall. Rules live in RulesDir
@@ -206,6 +208,7 @@ func Default() *Config {
 		},
 		Cache: Cache{
 			MaxSizeBytes: 256 * 1024 * 1024, // 256 MiB shared cache
+			MaxEntries:   0,                 // no object-count limit by default
 		},
 		WAF: WAF{
 			Enabled:      false,
@@ -325,6 +328,9 @@ func (c *Config) validate() error {
 
 	if c.Cache.MaxSizeBytes < 0 {
 		return fmt.Errorf("cache.max_size_bytes must be >= 0")
+	}
+	if c.Cache.MaxEntries < 0 {
+		return fmt.Errorf("cache.max_entries must be >= 0")
 	}
 
 	switch c.WAF.Mode {

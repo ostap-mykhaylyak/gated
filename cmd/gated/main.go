@@ -158,7 +158,7 @@ func runDaemon(cfgPath string) (err error) {
 
 	// Shared in-memory response cache (vhosts opt in via their cache
 	// section).
-	cacheStore := cache.New(mgr.Get().Cache.MaxSizeBytes)
+	cacheStore := cache.New(mgr.Get().Cache.MaxSizeBytes, mgr.Get().Cache.MaxEntries)
 
 	// Vhost store (one YAML per vhost, hot-reloaded, last-good on errors).
 	vhosts := vhost.NewStore(paths.VhostsDir, logs.Service)

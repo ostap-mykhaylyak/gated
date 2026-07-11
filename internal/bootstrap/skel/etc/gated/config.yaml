@@ -60,8 +60,10 @@ geoip:
 
 cache:
   # Shared in-memory response cache. Always allocated; each vhost opts
-  # in via its own `cache` section. This only bounds the total memory.
-  max_size_bytes: 268435456     # 256 MiB
+  # in via its own `cache` section. This section only bounds the store:
+  # LRU eviction keeps it within both limits.
+  max_size_bytes: 268435456     # 256 MiB total
+  max_entries: 0                # LRU object cap; 0 = no count limit (changing needs a restart)
 
 waf:
   # Web application firewall. Rules live in rules_dir, one group per

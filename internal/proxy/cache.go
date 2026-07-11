@@ -23,6 +23,9 @@ func cacheableRequest(r *http.Request, c *vhost.Cache) bool {
 	if r.Method != http.MethodGet {
 		return false
 	}
+	if !c.PathEligible(r.URL.Path) {
+		return false
+	}
 	if strings.Contains(strings.ToLower(r.Header.Get("Cache-Control")), "no-store") {
 		return false
 	}

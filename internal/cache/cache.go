@@ -38,16 +38,19 @@ type node struct {
 
 // Store is a thread-safe LRU cache bounded by total bytes.
 type Store struct {
-	mu    sync.Mutex
-	max   int64
-	bytes int64
-	ll    *list.List // front = most recently used
-	items map[string]*list.Element
+	mu      sync.Mutex
+	max     int64
+	maxEnts int
+	bytes   int64
+	ll      *list.List // front = most recently used
+	items   map[string]*list.Element
 }
 
-// New returns a Store holding at most max bytes (max <= 0 disables it).
-func New(max int64) *Store {
-	return &Store{max: max, ll: list.New(), items: map[string]*list.Element{}}
+// New returns a Store holding at most maxBytes bytes and, when
+// maxEntries > 0, at most that many objects (maxBytes <= 0 disables the
+// cache entirely). LRU eviction keeps both bounds.
+func New(maxBytes int64, maxEntries int) *Store {
+	return &Store{max: maxBytes, maxEnts: maxEntries, ll: list.New(), items: map[string]*list.Element{}}
 }
 
 // Get returns a live (non-expired) entry, moving it to most-recent.
@@ -89,7 +92,7 @@ func (s *Store) Set(key string, e *Entry) {
 	el := s.ll.PushFront(&node{key: key, entry: e, bytes: sz})
 	s.items[key] = el
 	s.bytes += sz
-	for s.bytes > s.max {
+	for s.bytes > s.max || (s.maxEnts > 0 && len(s.items) > s.maxEnts) {
 		back := s.ll.Back()
 		if back == nil {
 			break

@@ -195,7 +195,10 @@ func Default() *Config {
 			MinVersion:     "1.2",
 		},
 		ACME: ACME{
-			Passthrough: true,
+			// Off by default: HTTP-01 renewals reach the backend through
+			// the vhost. Opt in only to forward challenges to a fixed
+			// upstream regardless of vhost routing.
+			Passthrough: false,
 			Upstream:    "http://127.0.0.1:80",
 		},
 		Proxy: Proxy{

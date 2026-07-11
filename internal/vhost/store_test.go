@@ -164,17 +164,23 @@ func TestBackendProtocolValidation(t *testing.T) {
 }
 
 func TestExampleVhostSchemaLoads(t *testing.T) {
-	// The shipped .example file must always match the real schema.
-	data, err := os.ReadFile(filepath.Join("..", "bootstrap", "skel", "etc", "gated", "vhosts", "example.com.yaml.example"))
-	if err != nil {
-		t.Fatal(err)
+	// Every shipped *.yaml.example must match the current schema.
+	skel := filepath.Join("..", "bootstrap", "skel", "etc", "gated", "vhosts")
+	examples, err := filepath.Glob(filepath.Join(skel, "*.yaml.example"))
+	if err != nil || len(examples) == 0 {
+		t.Fatalf("no shipped vhost examples found: %v", err)
 	}
-	dir := t.TempDir()
-	write(t, dir, "example.com.yaml", string(data))
-
-	s := NewStore(dir, discard)
-	s.LoadAll(config.Default())
-	if s.Lookup("example.com") == nil {
-		t.Fatal("shipped example vhost must load against the current schema")
+	for _, ex := range examples {
+		data, err := os.ReadFile(ex)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir := t.TempDir()
+		write(t, dir, "vhost.yaml", string(data))
+		s := NewStore(dir, discard)
+		s.LoadAll(config.Default())
+		if s.Count() == 0 {
+			t.Fatalf("shipped example %s must load against the current schema", filepath.Base(ex))
+		}
 	}
 }

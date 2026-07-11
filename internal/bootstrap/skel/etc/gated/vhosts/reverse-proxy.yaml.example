@@ -1,30 +1,29 @@
 # gated - minimal reverse-proxy virtual host.
 #
 # gated listens on both :80 (HTTP) and :443 (HTTPS) — see entrypoints
-# in config.yaml. This vhost is served on both; redirect_to_https
-# decides what happens to plain HTTP requests. Copy to <name>.yaml to
-# enable.
+# in config.yaml. It serves this vhost on both and, by default,
+# preserves the request scheme to the backend: an HTTP request goes to
+# an http:// backend, an HTTPS request to an https:// backend. That way
+# the origin (CMS/nginx) decides whether to redirect — gated does not
+# force it. Copy to <name>.yaml to enable.
 
 hosts: ["example.com", "www.example.com"]
 
-# HTTP handling:
-#   true  - gated answers :80 with a 301 to https:// (the usual choice
-#           when the host has a certificate).
-#   false - gated proxies HTTP straight to the backend without
-#           redirecting. Use this when the CMS does its own
-#           http->https redirect, or when the site is HTTP-only (no
-#           certificate).
-redirect_to_https: true
-
-# One line per backend: the url carries scheme + host + port. Point it
-# at your app or local nginx.
-#   - HTTPS backend: SNI / cert name auto-derive from the first host,
-#     so no backend_tls is needed for the common local-nginx case.
-#   - HTTP-only site: use http://127.0.0.1:80 here and set
-#     redirect_to_https: false above (gated then serves plain HTTP).
+# List a backend per scheme so gated can preserve it end-to-end. The
+# url carries scheme + host + port. For an https:// backend addressed
+# by IP (local nginx), SNI / cert name auto-derive from the first host,
+# so no backend_tls is needed.
 backends:
-  - url: "https://127.0.0.1:443"
+  - url: "http://127.0.0.1:80"    # HTTP requests land here (nginx may 301 to https)
+  - url: "https://127.0.0.1:443"  # HTTPS requests land here (the site)
 
-# Optional, only for a self-signed backend certificate:
-# backend_tls:
+# Optional overrides:
+#
+# redirect_to_https: true   # force http->https at the edge, instead of
+#                           # letting the backend decide. Only enable if
+#                           # the host has a certificate.
+#
+# backend_tls:              # only for a self-signed backend certificate
 #   insecure_skip_verify: true
+#
+# For an HTTP-only site: list just the http:// backend (no cert needed).

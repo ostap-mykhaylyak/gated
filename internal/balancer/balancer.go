@@ -171,8 +171,18 @@ func (p *Pool) Close() { p.closeOnce.Do(func() { close(p.stop) }) }
 // Pick selects a backend: available primaries first, then available
 // backups. Sticky affinity, when enabled and valid, wins over the
 // strategy. Returns nil when nothing is available.
-func (p *Pool) Pick(req *http.Request, clientIP string) *Backend {
-	cands := available(p.primaries)
+func (p *Pool) Pick(req *http.Request, clientIP, scheme string) *Backend {
+	// Prefer backends whose scheme matches the request (http/https), so
+	// gated preserves the scheme end-to-end and the origin decides
+	// redirects. Fall back to any scheme when none match (e.g. only one
+	// scheme is configured).
+	cands := availableScheme(p.primaries, scheme)
+	if len(cands) == 0 {
+		cands = availableScheme(p.backups, scheme)
+	}
+	if len(cands) == 0 {
+		cands = available(p.primaries)
+	}
 	if len(cands) == 0 {
 		cands = available(p.backups)
 	}
@@ -253,6 +263,31 @@ func available(backends []*Backend) []*Backend {
 		}
 	}
 	return out
+}
+
+// availableScheme returns available backends whose URL scheme matches
+// scheme; an empty scheme means "any" (no filtering).
+func availableScheme(backends []*Backend, scheme string) []*Backend {
+	if scheme == "" {
+		return available(backends)
+	}
+	out := make([]*Backend, 0, len(backends))
+	for _, b := range backends {
+		if b.Available() && b.URL.Scheme == scheme {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+// HasScheme reports whether the pool has any backend of the given scheme.
+func (p *Pool) HasScheme(scheme string) bool {
+	for _, b := range p.all {
+		if b.URL.Scheme == scheme {
+			return true
+		}
+	}
+	return false
 }
 
 func idFor(u *url.URL) string {

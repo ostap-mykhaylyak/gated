@@ -287,7 +287,11 @@ type VHost struct {
 // health section inherits the global config.
 func defaults(cfg *config.Config) *VHost {
 	return &VHost{
-		RedirectToHTTPS: true,
+		// Off by default: gated preserves the request scheme to the
+		// backend (http->http backend, https->https backend) and lets
+		// the origin/CMS decide redirects. Set true to force http->https
+		// at the edge regardless of the backend.
+		RedirectToHTTPS: false,
 		BackendProtocol: "auto",
 		LoadBalancing: LB{
 			Strategy: "round_robin",

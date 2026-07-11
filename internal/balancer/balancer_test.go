@@ -19,7 +19,7 @@ func pickN(t *testing.T, p *Pool, n int) map[string]int {
 	req := httptest.NewRequest("GET", "/", nil)
 	got := map[string]int{}
 	for i := 0; i < n; i++ {
-		b := p.Pick(req, "203.0.113.7")
+		b := p.Pick(req, "203.0.113.7", "")
 		if b == nil {
 			t.Fatal("Pick returned nil with available backends")
 		}
@@ -52,7 +52,7 @@ func TestBackupFailover(t *testing.T) {
 	}
 	req := httptest.NewRequest("GET", "/", nil)
 
-	b := p.Pick(req, "ip")
+	b := p.Pick(req, "ip", "")
 	if b.URL.Host != "primary:1" {
 		t.Fatalf("backup used while primary is up: %s", b.URL)
 	}
@@ -63,8 +63,33 @@ func TestBackupFailover(t *testing.T) {
 	if b.Available() {
 		t.Fatal("primary must be down after max_fails")
 	}
-	if got := p.Pick(req, "ip"); got.URL.Host != "backup:1" {
+	if got := p.Pick(req, "ip", ""); got.URL.Host != "backup:1" {
 		t.Fatalf("backup not used with primary down: %s", got.URL)
+	}
+}
+
+func TestPickByScheme(t *testing.T) {
+	p, err := New(testConf("round_robin",
+		BackendConf{URL: "http://origin:80"},
+		BackendConf{URL: "https://origin:443"},
+	), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("GET", "/", nil)
+
+	// An http request must go to the http backend, https to the https one.
+	if got := p.Pick(req, "ip", "http"); got.URL.Scheme != "http" {
+		t.Fatalf("http request picked %s", got.URL)
+	}
+	if got := p.Pick(req, "ip", "https"); got.URL.Scheme != "https" {
+		t.Fatalf("https request picked %s", got.URL)
+	}
+
+	// Only-one-scheme pool: the other scheme falls back to what exists.
+	only, _ := New(testConf("round_robin", BackendConf{URL: "https://origin:443"}), nil)
+	if got := only.Pick(req, "ip", "http"); got == nil || got.URL.Scheme != "https" {
+		t.Fatalf("must fall back to the only scheme, got %v", got)
 	}
 }
 
@@ -80,7 +105,7 @@ func TestLeastConn(t *testing.T) {
 	a := p.Backends()[0]
 	a.Acquire()
 	defer a.Release()
-	if got := p.Pick(req, "ip"); got.URL.Host != "b:1" {
+	if got := p.Pick(req, "ip", ""); got.URL.Host != "b:1" {
 		t.Fatalf("least_conn must avoid the busy backend, picked %s", got.URL)
 	}
 }
@@ -95,9 +120,9 @@ func TestIPHashStable(t *testing.T) {
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest("GET", "/", nil)
-	first := p.Pick(req, "198.51.100.23")
+	first := p.Pick(req, "198.51.100.23", "")
 	for i := 0; i < 10; i++ {
-		if got := p.Pick(req, "198.51.100.23"); got != first {
+		if got := p.Pick(req, "198.51.100.23", ""); got != first {
 			t.Fatal("ip_hash affinity not stable")
 		}
 	}
@@ -117,7 +142,7 @@ func TestStickyCookieWins(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("Cookie", "aff="+target.ID)
 	for i := 0; i < 5; i++ {
-		if got := p.Pick(req, "ip"); got != target {
+		if got := p.Pick(req, "ip", ""); got != target {
 			t.Fatal("sticky cookie must pin the backend")
 		}
 	}

@@ -91,6 +91,20 @@ func TestPickByScheme(t *testing.T) {
 	if got := only.Pick(req, "ip", "http"); got == nil || got.URL.Scheme != "https" {
 		t.Fatalf("must fall back to the only scheme, got %v", got)
 	}
+
+	// Configured-but-down scheme must NOT fall back to the other scheme
+	// (that would loop http<->https): mark the https backend down and
+	// expect nil, not the http backend.
+	for _, b := range p.Backends() {
+		if b.URL.Scheme == "https" {
+			for i := 0; i < 3; i++ {
+				p.Report(b, false)
+			}
+		}
+	}
+	if got := p.Pick(req, "ip", "https"); got != nil {
+		t.Fatalf("down https backend must not fall back to http, got %s", got.URL)
+	}
 }
 
 func TestLeastConn(t *testing.T) {

@@ -180,11 +180,16 @@ func (p *Pool) Pick(req *http.Request, clientIP, scheme string) *Backend {
 	if len(cands) == 0 {
 		cands = availableScheme(p.backups, scheme)
 	}
-	if len(cands) == 0 {
+	// Fall back to another scheme ONLY when none is configured for the
+	// requested scheme — not when they are merely all down. Falling
+	// http<->https for a down backend creates redirect loops (an http
+	// origin 301s to https), so a configured-but-down scheme yields nil
+	// (→ 503) instead, making the failure loud rather than a silent loop.
+	if len(cands) == 0 && !p.HasScheme(scheme) {
 		cands = available(p.primaries)
-	}
-	if len(cands) == 0 {
-		cands = available(p.backups)
+		if len(cands) == 0 {
+			cands = available(p.backups)
+		}
 	}
 	if len(cands) == 0 {
 		return nil

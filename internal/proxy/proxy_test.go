@@ -519,6 +519,29 @@ func TestHTTP2Backend(t *testing.T) {
 	}
 }
 
+func TestUntrustedHTTPSBackendFailsClean(t *testing.T) {
+	// An https backend whose cert can't be verified (no
+	// insecure_skip_verify) must fail cleanly (502), not loop or hang.
+	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "secret")
+	}))
+	defer backend.Close()
+
+	vh := "hosts: [\"app.test\"]\nredirect_to_https: false\nbackends:\n  - url: \"" + backend.URL + "\"\n"
+	p := newTestProxy(t, "{}\n", map[string]string{"app.yaml": vh})
+
+	req := httptest.NewRequest("GET", "https://app.test/", nil)
+	req.Host = "app.test"
+	rec := httptest.NewRecorder()
+	p.Handler(true).ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway && rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("untrusted https backend must fail (502/503), got %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "secret") {
+		t.Fatal("must not reach the backend with an unverified cert")
+	}
+}
+
 func TestSchemePreservingBackends(t *testing.T) {
 	// Two backends, one per scheme: gated must route each request to the
 	// backend matching its scheme, so the origin decides redirects.

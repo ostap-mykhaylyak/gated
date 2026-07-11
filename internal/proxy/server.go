@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,21 @@ import (
 
 	"github.com/quic-go/quic-go/http3"
 )
+
+// certHint returns an actionable message when err is a backend TLS
+// certificate verification failure — the usual cause of an https
+// backend being unusable (and, before, of a confusing fallback). It
+// tells the operator exactly which knob to turn.
+func certHint(err error) string {
+	var ve *tls.CertificateVerificationError
+	var ua x509.UnknownAuthorityError
+	var he x509.HostnameError
+	var ci x509.CertificateInvalidError
+	if errors.As(err, &ve) || errors.As(err, &ua) || errors.As(err, &he) || errors.As(err, &ci) {
+		return "origin TLS certificate not trusted for this backend — set backend_tls.insecure_skip_verify: true (trusted network) or backend_tls.server_name to the cert's name, or fix the origin certificate"
+	}
+	return ""
+}
 
 // bindError wraps a listener bind failure, adding an actionable hint
 // when the port is already taken — the usual cause being another server

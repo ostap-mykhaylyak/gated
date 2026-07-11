@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"crypto/x509"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,16 @@ import (
 	"syscall"
 	"testing"
 )
+
+func TestCertHint(t *testing.T) {
+	// A cert verification error yields an actionable hint.
+	if h := certHint(x509.UnknownAuthorityError{}); h == "" || !strings.Contains(h, "insecure_skip_verify") {
+		t.Fatalf("cert error must produce an insecure_skip_verify hint, got %q", h)
+	}
+	if h := certHint(errors.New("connection refused")); h != "" {
+		t.Fatalf("non-cert error must have no hint, got %q", h)
+	}
+}
 
 func TestSelfRedirectDetection(t *testing.T) {
 	req := httptest.NewRequest("GET", "https://www.petralito.it/", nil)

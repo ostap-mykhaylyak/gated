@@ -303,6 +303,15 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 			b := pool.Pick(r, clientIP, reqScheme)
 			if b == nil {
 				failed = true
+				// Loud, specific reason: a configured scheme with no
+				// usable backend is almost always all backends of that
+				// scheme being down (see the earlier backend errors).
+				hint := "all backends are down"
+				if v.Pool.HasScheme(reqScheme) {
+					hint = "all " + reqScheme + ":// backends are down — see earlier backend errors in this log"
+				}
+				p.logs.Backend.Error("no backend available", "ray_id", reqID,
+					"host", host, "scheme", reqScheme, "reason", hint)
 				p.pages.Message(cw, pages.MessageData{
 					Code: http.StatusServiceUnavailable, Title: "Service Unavailable",
 					Message: "No backend server is available to handle your request right now. Please try again shortly.",
@@ -339,8 +348,13 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 				}
 				return
 			}
-			p.logs.Backend.Error("backend error",
-				"host", host, "backend", backendURL, "error", err)
+			if hint := certHint(err); hint != "" {
+				p.logs.Backend.Error("backend error", "ray_id", reqID,
+					"host", host, "backend", backendURL, "error", err, "hint", hint)
+			} else {
+				p.logs.Backend.Error("backend error", "ray_id", reqID,
+					"host", host, "backend", backendURL, "error", err)
+			}
 			if wrote || errors.Is(err, context.Canceled) || r.ContentLength != 0 {
 				failed = true
 				return

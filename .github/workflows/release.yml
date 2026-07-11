@@ -8,7 +8,7 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -38,8 +38,27 @@ jobs:
           cp gated internal/bootstrap/gated.service README.md LICENSE "$BUNDLE"/
           tar -czf "$BUNDLE.tar.gz" "$BUNDLE"
           sha256sum "$BUNDLE.tar.gz" > "$BUNDLE.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            gated-*.tar.gz
+            gated-*.tar.gz.sha256
+          if-no-files-found: error
+
+  # A single release job creates the GitHub release once, after both
+  # builds finish — avoids the race where two matrix jobs try to create
+  # the same release concurrently.
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
       - uses: softprops/action-gh-release@v3
         with:
           files: |
-            gated-*.tar.gz
-            gated-*.tar.gz.sha256
+            dist/gated-*.tar.gz
+            dist/gated-*.tar.gz.sha256

@@ -8,9 +8,26 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
+	"syscall"
 
 	"github.com/quic-go/quic-go/http3"
 )
+
+// bindError wraps a listener bind failure, adding an actionable hint
+// when the port is already taken — the usual cause being another server
+// (e.g. nginx) already on this address. A wildcard 0.0.0.0 bind also
+// collides with anything on 127.0.0.1 on the same port.
+func bindError(name, addr string, err error) error {
+	if errors.Is(err, syscall.EADDRINUSE) {
+		hint := "another process already holds this port (check: ss -ltnp)"
+		if strings.HasPrefix(addr, "0.0.0.0:") || strings.HasPrefix(addr, ":") {
+			hint += "; note 0.0.0.0 overlaps 127.0.0.1 — if nginx is on loopback, bind gated to the public IP instead"
+		}
+		return fmt.Errorf("bind %s (%s): %w — %s", name, addr, err, hint)
+	}
+	return fmt.Errorf("bind %s (%s): %w", name, addr, err)
+}
 
 // GetCertificate is the SNI callback of the TLS listeners: SNI → vhost
 // → certificate (explicit pair, forced cert_name, or conventional
@@ -78,7 +95,7 @@ func (s *Server) Start() error {
 	}
 	httpLn, err := net.Listen("tcp", cfg.Entrypoints.HTTP.Listen)
 	if err != nil {
-		return fmt.Errorf("bind http: %w", err)
+		return bindError("http", cfg.Entrypoints.HTTP.Listen, err)
 	}
 	go func() {
 		if err := s.httpSrv.Serve(httpLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -101,7 +118,7 @@ func (s *Server) Start() error {
 	httpsLn, err := net.Listen("tcp", cfg.Entrypoints.HTTPS.Listen)
 	if err != nil {
 		httpLn.Close()
-		return fmt.Errorf("bind https: %w", err)
+		return bindError("https", cfg.Entrypoints.HTTPS.Listen, err)
 	}
 	go func() {
 		if err := s.httpsSrv.ServeTLS(httpsLn, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {

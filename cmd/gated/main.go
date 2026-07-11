@@ -70,7 +70,7 @@ func main() {
 	fatalIf(runDaemon(*cfgPath))
 }
 
-func runDaemon(cfgPath string) error {
+func runDaemon(cfgPath string) (err error) {
 	// First execution without a config: auto-provision the default
 	// layout from the embedded skel, warn on stderr and keep going.
 	if cfgPath == paths.ConfigFile {
@@ -92,6 +92,14 @@ func runDaemon(cfgPath string) error {
 		return err
 	}
 	defer logs.Close()
+	// Surface a fatal startup error (e.g. a port already in use) in the
+	// service log too, not only on stderr — otherwise a crash loop is
+	// invisible to anyone reading gated.log. Runs before logs.Close.
+	defer func() {
+		if err != nil {
+			logs.Service.Error("fatal error, exiting", "error", err.Error())
+		}
+	}()
 
 	logs.Service.Info("starting", "version", version, "config", cfgPath, "pid", os.Getpid())
 	for _, w := range mgr.Get().Warnings {

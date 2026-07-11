@@ -11,6 +11,11 @@ Description=gated - reverse proxy and load balancer
 Documentation=https://github.com/ostap-mykhaylyak/gated
 After=network-online.target
 Wants=network-online.target
+# Stop hammering if startup keeps failing (e.g. a port already in use):
+# after 5 failures within 60s systemd gives up and the unit stays
+# failed, so the problem is visible instead of an endless restart loop.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple

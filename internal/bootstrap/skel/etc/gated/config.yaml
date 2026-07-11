@@ -8,9 +8,14 @@
 # Every field is optional: omitted fields keep their production
 # default (the values shown here). Reloaded automatically on change.
 
+# IMPORTANT: if another server (e.g. nginx) already listens on
+# 127.0.0.1:80/443 on this host, do NOT use 0.0.0.0 here — 0.0.0.0
+# overlaps 127.0.0.1 on the same port and the bind will fail with
+# "address already in use". Bind gated to the PUBLIC IP instead
+# (e.g. "203.0.113.10:80"), leaving nginx on loopback as the backend.
 entrypoints:
   http:
-    listen: "0.0.0.0:80"        # e.g. "0.0.0.0:80"
+    listen: "0.0.0.0:80"        # public IP when nginx is on 127.0.0.1:80
   https:
     listen: "0.0.0.0:443"       # TCP (HTTP/1.1 + HTTP/2)
     http3: true                 # QUIC on the same UDP port + Alt-Svc header

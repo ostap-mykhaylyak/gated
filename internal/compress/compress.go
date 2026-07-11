@@ -156,9 +156,24 @@ func (cw *writer) decide(code int) {
 		}
 		h.Set("Content-Encoding", cw.encoding)
 		h.Del("Content-Length")
-		h.Add("Vary", "Accept-Encoding")
+		AddVary(h, "Accept-Encoding")
 		cw.enc = newEncoder(cw.encoding, cw.ResponseWriter)
 	}
+}
+
+// AddVary appends token to the Vary header only if it is not already
+// present (case-insensitive), so repeated passes — a compressing miss
+// stored in cache, then a compressing cache hit, plus a backend that
+// already set Vary — do not duplicate the token.
+func AddVary(h http.Header, token string) {
+	for _, v := range h.Values("Vary") {
+		for _, part := range strings.Split(v, ",") {
+			if strings.EqualFold(strings.TrimSpace(part), token) {
+				return
+			}
+		}
+	}
+	h.Add("Vary", token)
 }
 
 func (cw *writer) finish() {

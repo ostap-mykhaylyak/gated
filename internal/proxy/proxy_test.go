@@ -68,7 +68,7 @@ func newTestProxy(t *testing.T, globalYAML string, vhostFiles map[string]string)
 	}
 	chal := challenge.NewManager("test-secret", 0, time.Minute)
 	sess := session.NewManager("test-session-secret", time.Hour)
-	return New(mgr, store, certs.New(t.TempDir()), wafEngine, nil, chal, sess, pg, cache.New(64<<20), m, logs)
+	return New(mgr, store, certs.New(t.TempDir()), wafEngine, nil, chal, sess, pg, cache.New(64<<20, 0), m, logs)
 }
 
 func vhostYAML(backendURL string, extra string) string {
@@ -579,6 +579,42 @@ func TestCacheDoesNotCorruptCompressible(t *testing.T) {
 	}
 }
 
+func TestCacheExtensionFilter(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Cache-Control", "max-age=300")
+		io.WriteString(w, "body:"+r.URL.Path)
+	}))
+	defer backend.Close()
+
+	vh := "hosts: [\"app.test\"]\nredirect_to_https: false\n" +
+		"cache:\n  enabled: true\n  ttl: 5m\n  extensions: [\".css\", \".js\"]\nbackends:\n  - url: \"" + backend.URL + "\"\n"
+	p := newTestProxy(t, "{}\n", map[string]string{"app.yaml": vh})
+
+	xcache := func(path string) string {
+		req := httptest.NewRequest("GET", "http://app.test"+path, nil)
+		req.Host = "app.test"
+		rec := httptest.NewRecorder()
+		p.Handler(false).ServeHTTP(rec, req)
+		return rec.Header().Get("X-Cache")
+	}
+
+	// A .css asset is cached: MISS then HIT.
+	if got := xcache("/style.css"); got != "MISS" {
+		t.Fatalf("first .css must be MISS, got %q", got)
+	}
+	if got := xcache("/style.css"); got != "HIT" {
+		t.Fatalf("second .css must be HIT, got %q", got)
+	}
+	// A non-matching path (HTML) is never cached: no X-Cache header.
+	if got := xcache("/page"); got != "" {
+		t.Fatalf("non-matching path must not be cached, X-Cache=%q", got)
+	}
+	if got := xcache("/page"); got != "" {
+		t.Fatalf("non-matching path must stay uncached, X-Cache=%q", got)
+	}
+}
+
 func TestClientCancelDoesNotMarkBackendDown(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "ok")
@@ -748,7 +784,7 @@ func wafProxy(t *testing.T, backendURL, wafRules string) http.Handler {
 	pg, _ := pages.New("")
 	chal := challenge.NewManager("test-secret", 0, time.Minute)
 	sess := session.NewManager("test-session-secret", time.Hour)
-	return New(mgr, store, certs.New(t.TempDir()), wafEngine, nil, chal, sess, pg, cache.New(64<<20), m, logs).Handler(true)
+	return New(mgr, store, certs.New(t.TempDir()), wafEngine, nil, chal, sess, pg, cache.New(64<<20, 0), m, logs).Handler(true)
 }
 
 func TestWAFBlocksThroughProxy(t *testing.T) {

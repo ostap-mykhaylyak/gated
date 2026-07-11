@@ -287,7 +287,7 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 		var capture *cacheWriter
 		backendW := cw
 		if cacheStoreKey != "" {
-			capture = &cacheWriter{ResponseWriter: cw, limit: v.Cache.MaxObjectBytes}
+			capture = &cacheWriter{ResponseWriter: cw, limit: v.Cache.MaxObjectSize}
 			backendW = capture
 			cw.Header().Set("X-Cache", "MISS")
 		}

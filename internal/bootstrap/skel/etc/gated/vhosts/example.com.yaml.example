@@ -41,7 +41,12 @@ backends:
     backup: true                    # only used when all primary backends are down
 
 backend_tls:                 # only relevant for https:// backends
-  # server_name: "example.com"      # SNI / cert name when addressing a backend by IP
+  # server_name is auto-set to the vhost's first host when the backend
+  # is an IP (e.g. https://127.0.0.1:443 for a local nginx), so you can
+  # usually leave it empty — the public cert then verifies and nginx
+  # picks the right server block by SNI. Set it only to force a
+  # different name.
+  # server_name: "example.com"
   insecure_skip_verify: false       # true = accept self-signed backend certs (trusted LAN only)
 
 # Wire protocol toward the backend. "auto" negotiates HTTP/2 over TLS

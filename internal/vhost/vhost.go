@@ -279,6 +279,8 @@ type VHost struct {
 	WAFPol    waf.Policy        `yaml:"-"` // global WAF + overrides
 	Pool      *balancer.Pool    `yaml:"-"`
 	Transport http.RoundTripper `yaml:"-"` // backend transport (per-vhost TLS/protocol)
+
+	backendSNI string // resolved SNI / verification name for https backends
 }
 
 // defaults returns a VHost pre-filled with production defaults; the
@@ -363,27 +365,56 @@ func loadFile(path string, cfg *config.Config, prev *VHost) (*VHost, error) {
 		}
 	}
 
-	// Reuse the previous transport when the TLS settings and protocol
-	// are unchanged, to preserve backend keep-alive connections across
-	// reloads.
+	// Resolve the SNI / cert-verification name for HTTPS backends. When
+	// backend_tls.server_name is unset and the backend is addressed by
+	// IP (e.g. https://127.0.0.1:443 for a local nginx), default it to
+	// the vhost's own host, so the operator need not repeat it and the
+	// public certificate verifies. A hostname backend keeps Go's default
+	// (its own URL host).
+	v.backendSNI = v.BackendTLS.ServerName
+	if v.backendSNI == "" {
+		v.backendSNI = defaultBackendSNI(v)
+	}
+
+	// Reuse the previous transport when the TLS settings, protocol and
+	// resolved SNI are unchanged, to preserve backend keep-alive
+	// connections across reloads.
 	if prev != nil && prev.Transport != nil &&
-		prev.BackendTLS == v.BackendTLS && prev.BackendProtocol == v.BackendProtocol {
+		prev.BackendTLS == v.BackendTLS && prev.BackendProtocol == v.BackendProtocol &&
+		prev.backendSNI == v.backendSNI {
 		v.Transport = prev.Transport
 	} else {
-		v.Transport = buildTransport(cfg, v.BackendTLS, v.BackendProtocol)
+		v.Transport = buildTransport(cfg, v.BackendTLS, v.BackendProtocol, v.backendSNI)
 	}
 	return v, nil
 }
 
+// defaultBackendSNI returns the vhost's first host when an https backend
+// is addressed by a bare IP (its certificate can only be for a name),
+// otherwise "" to keep Go's default (the backend URL host).
+func defaultBackendSNI(v *VHost) string {
+	if len(v.Hosts) == 0 {
+		return ""
+	}
+	for _, b := range v.Backends {
+		u, err := url.Parse(b.URL)
+		if err == nil && u.Scheme == "https" && net.ParseIP(u.Hostname()) != nil {
+			return v.Hosts[0]
+		}
+	}
+	return ""
+}
+
 // backendTLSConfig builds the client TLS config for HTTPS backends, or
-// nil when no override is needed.
-func backendTLSConfig(btls BackendTLS) *tls.Config {
-	if btls.ServerName == "" && !btls.InsecureSkipVerify {
+// nil when no override is needed. serverName is the resolved SNI /
+// verification name (may be "").
+func backendTLSConfig(btls BackendTLS, serverName string) *tls.Config {
+	if serverName == "" && !btls.InsecureSkipVerify {
 		return nil
 	}
 	return &tls.Config{
 		MinVersion:         tls.VersionTLS12,
-		ServerName:         btls.ServerName,
+		ServerName:         serverName,
 		InsecureSkipVerify: btls.InsecureSkipVerify,
 	}
 }
@@ -395,9 +426,9 @@ func backendTLSConfig(btls BackendTLS) *tls.Config {
 //	        HTTP/1.1 otherwise. Best default for remote backends.
 //	http1 - force HTTP/1.1 (disable h2 negotiation).
 //	http3 - HTTP/3 over QUIC (requires https:// backends).
-func buildTransport(cfg *config.Config, btls BackendTLS, proto string) http.RoundTripper {
+func buildTransport(cfg *config.Config, btls BackendTLS, proto, serverName string) http.RoundTripper {
 	if proto == "http3" {
-		tc := backendTLSConfig(btls)
+		tc := backendTLSConfig(btls, serverName)
 		if tc == nil {
 			tc = &tls.Config{MinVersion: tls.VersionTLS12}
 		}
@@ -422,7 +453,7 @@ func buildTransport(cfg *config.Config, btls BackendTLS, proto string) http.Roun
 		// DialContext (which otherwise disables the auto-upgrade).
 		ForceAttemptHTTP2: proto == "auto",
 	}
-	tr.TLSClientConfig = backendTLSConfig(btls)
+	tr.TLSClientConfig = backendTLSConfig(btls, serverName)
 	if proto == "http1" {
 		// Belt and suspenders: refuse the h2 ALPN protocol entirely.
 		tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}

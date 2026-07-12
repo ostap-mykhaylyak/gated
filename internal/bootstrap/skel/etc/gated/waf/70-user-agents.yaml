@@ -1,0 +1,96 @@
+# gated WAF - User-Agent rules (starter set).
+#
+# Disabled by default. Challenge/block clients by their User-Agent.
+#
+# WARNING: a `challenge` requires JavaScript to pass, so SEARCH-ENGINE
+# CRAWLERS (Googlebot, Bingbot) and legitimate API clients will FAIL it
+# and be shut out. Only challenge User-Agents you are sure are bots. In
+# particular, "Macintosh" matches EVERY macOS browser (real visitors),
+# so that rule is kept separate — remove it if you don't want to gate
+# Mac users. Tune this with waf.mode: detect first.
+
+group: user-agents
+description: User-Agent challenge/block (edit before enabling).
+enabled: false
+
+rules:
+  # Automation libraries and scrapers: challenge (a real browser passes,
+  # a non-JS client does not). pm = case-insensitive substring set.
+  - id: "ua-automation-challenge"
+    msg: "automated User-Agent"
+    severity: low
+    action: challenge
+    match:
+      - field: header
+        name: User-Agent
+        operator: pm
+        patterns:
+          - "python-requests"
+          - "python-urllib"
+          - "Go-http-client"
+          - "curl/"
+          - "Wget/"
+          - "libwww-perl"
+          - "okhttp"
+          - "aiohttp"
+          - "node-fetch"
+          - "axios"
+          - "Java/"
+          - "Apache-HttpClient"
+          - "Scrapy"
+          - "HeadlessChrome"
+          - "PhantomJS"
+          - "http.rb"
+          - "Guzzle"
+          - "Bytespider"
+
+  # Empty or missing User-Agent: challenge (real browsers always send one).
+  - id: "ua-empty-challenge"
+    msg: "empty or missing User-Agent"
+    action: challenge
+    match:
+      - field: header
+        name: User-Agent
+        operator: rx
+        patterns: ['.']   # "has any character"
+        negate: true      # matches when the UA is empty or absent
+
+  # Known attack tools / scanners: block outright (never legitimate).
+  - id: "ua-scanner-block"
+    msg: "scanner or attack tool"
+    severity: high
+    action: block
+    status: 403
+    match:
+      - field: header
+        name: User-Agent
+        operator: pm
+        patterns:
+          - "sqlmap"
+          - "nikto"
+          - "nmap"
+          - "masscan"
+          - "nuclei"
+          - "wpscan"
+          - "acunetix"
+          - "netsparker"
+          - "zgrab"
+          - "Nessus"
+          - "dirbuster"
+          - "gobuster"
+          - "feroxbuster"
+          - "hydra"
+
+  # As requested: challenge any "Macintosh" User-Agent. NOTE this matches
+  # ALL macOS browsers (Safari/Chrome/Firefox on Mac) — i.e. real Mac
+  # visitors too, who will see the interstitial once per clearance
+  # window. Delete this rule if that is not what you want.
+  - id: "ua-macintosh-challenge"
+    msg: "Macintosh User-Agent"
+    severity: info
+    action: challenge
+    match:
+      - field: header
+        name: User-Agent
+        operator: pm
+        patterns: ["Macintosh"]

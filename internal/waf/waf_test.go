@@ -524,7 +524,7 @@ rules:
 func TestShippedWPWooRulesCompile(t *testing.T) {
 	// The shipped WP/Woo rule files are disabled by default; verify
 	// their rules still compile by loading them enabled.
-	for _, name := range []string{"60-wordpress.yaml", "61-woocommerce.yaml"} {
+	for _, name := range []string{"60-wordpress.yaml", "61-woocommerce.yaml", "70-user-agents.yaml"} {
 		data, err := os.ReadFile(filepath.Join("..", "bootstrap", "skel", "etc", "gated", "waf", name))
 		if err != nil {
 			t.Fatal(err)

@@ -42,7 +42,6 @@ rules:
           - "PhantomJS"
           - "http.rb"
           - "Guzzle"
-          - "Bytespider"
 
   # Empty or missing User-Agent: challenge (real browsers always send one).
   - id: "ua-empty-challenge"
@@ -80,6 +79,37 @@ rules:
           - "gobuster"
           - "feroxbuster"
           - "hydra"
+
+  # Declared SEO / aggressive crawlers: they identify themselves and do
+  # NOT run JS, so a challenge is pointless — rate-limit them to keep the
+  # load off the backend. Switch to `action: ban` (with a track block)
+  # or `action: block` to bar them entirely.
+  - id: "ua-aggressive-crawlers"
+    msg: "aggressive crawler rate limit"
+    severity: low
+    match:
+      - field: header
+        name: User-Agent
+        operator: pm
+        patterns:
+          - "AhrefsBot"
+          - "SemrushBot"
+          - "MJ12bot"
+          - "DotBot"
+          - "PetalBot"
+          - "Bytespider"
+          - "BLEXBot"
+          - "DataForSeoBot"
+          - "SeznamBot"
+          - "MegaIndex"
+          - "serpstatbot"
+          - "ZoominfoBot"
+          - "Barkrowler"
+          - "magpie-crawler"
+    rate_limit:
+      requests: 10
+      per: 1m
+      burst: 5
 
   # As requested: challenge any "Macintosh" User-Agent. NOTE this matches
   # ALL macOS browsers (Safari/Chrome/Firefox on Mac) — i.e. real Mac

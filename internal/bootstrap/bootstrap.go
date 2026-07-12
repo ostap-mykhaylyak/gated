@@ -134,9 +134,13 @@ gated %s installed. Next steps:
 
   1. review %s
   2. add your virtual hosts under %s/ (see example.com.yaml.example)
-  3. systemctl daemon-reload
-  4. systemctl enable --now gated
-  5. gated --status
+  3. for HTTP/3, raise the UDP buffers (quic-go needs them under load):
+       echo 'net.core.rmem_max=7500000' > /etc/sysctl.d/99-gated.conf
+       echo 'net.core.wmem_max=7500000' >> /etc/sysctl.d/99-gated.conf
+       sysctl --system
+  4. systemctl daemon-reload
+  5. systemctl enable --now gated
+  6. gated --status
 `, version, paths.ConfigFile, paths.VhostsDir)
 	return nil
 }

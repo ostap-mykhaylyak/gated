@@ -64,3 +64,47 @@ rules:
       threshold: 20
       window: 5m
       ban_time: 1h
+
+  # Cart/wishlist state actions (add-to-cart, remove_item, coupons,
+  # wishlist...) are GET links that scrapers follow, hammering the DB.
+  # They mutate a cart/wishlist, so they can't happen "cold": a request
+  # with NO prior visit session is a bot — block it. (Needs the visit
+  # session marker; see 50-session.yaml. Raise session.ttl if long-idle
+  # carts get blocked, or switch this to action: challenge to be softer.)
+  - id: "wc-cart-action-no-session"
+    msg: "cart/wishlist action without a prior session"
+    severity: medium
+    action: block
+    status: 403
+    match:
+      - field: query
+        operator: contains
+        patterns:
+          - "add-to-cart="
+          - "remove_item="
+          - "undo_item="
+          - "add_to_wishlist="
+          - "remove_from_wishlist="
+          - "apply_coupon="
+          - "remove_coupon="
+      - field: session
+        operator: eq
+        patterns: ["none"]
+
+  # The same actions WITH a session: still challenge, to stop bots that
+  # persist cookies but don't run JavaScript. block wins over challenge,
+  # so a cold request hits the rule above instead.
+  - id: "wc-cart-action-challenge"
+    msg: "cart/wishlist action - browser check"
+    action: challenge
+    match:
+      - field: query
+        operator: contains
+        patterns:
+          - "add-to-cart="
+          - "remove_item="
+          - "undo_item="
+          - "add_to_wishlist="
+          - "remove_from_wishlist="
+          - "apply_coupon="
+          - "remove_coupon="

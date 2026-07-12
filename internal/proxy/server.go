@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 )
 
@@ -149,6 +150,13 @@ func (s *Server) Start() error {
 			Addr:      cfg.Entrypoints.HTTPS.Listen,
 			Handler:   s.p.Handler(true),
 			TLSConfig: http3.ConfigureTLSConfig(tlsCfg),
+			// Asset-heavy pages open many concurrent streams; the
+			// quic-go default (100) is too low and stalls them. Give
+			// generous headroom.
+			QUICConfig: &quic.Config{
+				MaxIncomingStreams:    1000,
+				MaxIncomingUniStreams: 1000,
+			},
 		}
 		go func() {
 			if err := s.h3.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

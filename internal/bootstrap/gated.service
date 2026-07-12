@@ -26,6 +26,11 @@ RestartSec=2s
 TimeoutStopSec=30s
 KillSignal=SIGTERM
 
+# An edge proxy handles many concurrent client + backend connections;
+# the default file-descriptor limit (often 1024) causes dropped
+# connections (ERR_CONNECTION_CLOSED) under asset-heavy pages.
+LimitNOFILE=1048576
+
 RuntimeDirectory=gated
 RuntimeDirectoryMode=0750
 

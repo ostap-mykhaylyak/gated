@@ -1,12 +1,12 @@
 # gated WAF - WooCommerce hardening (starter set).
 #
-# Disabled by default. Protects the cart/checkout/API surface, which is
+# ENABLED by default; edit or set enabled: false to turn off. Protects the cart/checkout/API surface, which is
 # a common target for database-flooding and card-testing bots. Combine
 # with waf/50-session.yaml (prior-visit gate) for add-to-cart.
 
 group: woocommerce
-description: WooCommerce cart/checkout/API protections (edit before enabling).
-enabled: false
+description: WooCommerce cart/checkout/API protections.
+enabled: true
 
 rules:
   # Store API / AJAX: pace anonymous bursts (bots probing cart/checkout).

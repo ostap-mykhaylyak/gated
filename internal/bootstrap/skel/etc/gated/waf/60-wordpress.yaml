@@ -1,6 +1,6 @@
 # gated WAF - WordPress hardening (starter set).
 #
-# Disabled by default: review, then flip enabled to true. These rules
+# ENABLED by default. Review these rules for your site; they
 # assume the WAF is enabled for the vhost (waf.enabled). Some use the
 # `session` field (needs the session subsystem) and rate limiting.
 #
@@ -8,8 +8,8 @@
 # start with waf.mode: detect to watch what would trigger.
 
 group: wordpress
-description: WordPress-specific protections (edit before enabling).
-enabled: false
+description: WordPress-specific protections.
+enabled: true
 
 rules:
   # --- Brute force / abuse rate limiting -------------------------------

@@ -9,8 +9,8 @@
 # true — and edit the country list — to actually enforce.
 
 group: geoip
-description: Country/continent access control (edit before enabling).
-enabled: false
+description: Country/continent access control.
+enabled: true
 
 rules:
   # Block specific countries outright (ISO 3166-1 alpha-2 codes).

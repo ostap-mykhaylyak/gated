@@ -1,6 +1,6 @@
 # gated WAF - User-Agent rules (starter set).
 #
-# Disabled by default. Challenge/block clients by their User-Agent.
+# ENABLED by default; edit or set enabled: false to turn off. Challenge/block clients by their User-Agent.
 #
 # WARNING: a `challenge` requires JavaScript to pass, so SEARCH-ENGINE
 # CRAWLERS (Googlebot, Bingbot) and legitimate API clients will FAIL it
@@ -10,8 +10,8 @@
 # Mac users. Tune this with waf.mode: detect first.
 
 group: user-agents
-description: User-Agent challenge/block (edit before enabling).
-enabled: false
+description: User-Agent challenge/block.
+enabled: true
 
 rules:
   # Automation libraries and scrapers: challenge (a real browser passes,

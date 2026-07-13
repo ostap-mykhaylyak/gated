@@ -67,14 +67,14 @@ cache:
 
 waf:
   # Web application firewall. Rules live in rules_dir, one group per
-  # YAML file (see waf/*.yaml), hot-reloaded. ON by default with the
-  # safe protective core (waf/00-common, 10-injection, 20-fail2ban):
-  # these block attacks (traversal, /.env, sqli, xss) and ban scanners
-  # without touching legitimate traffic. The opinionated rule files
-  # (30-70) ship enabled:false — turn them on per-site after review
-  # (some, e.g. geo/country and User-Agent challenges, affect real
-  # visitors). Use mode "detect" to log matches without blocking while
-  # tuning, then switch back to "block". Per-vhost overrides available.
+  # YAML file (see waf/*.yaml), hot-reloaded. ON by default, and ALL the
+  # shipped rule files are enabled. The core (00-common, 10-injection,
+  # 20-fail2ban) blocks attacks and bans scanners with no effect on real
+  # visitors. The rest are opinionated and may touch legitimate traffic
+  # (e.g. 70-user-agents challenges every macOS browser; 40-challenge /
+  # 30-geoip act on country and so need geoip enabled). Watch waf.log
+  # and tune per site: edit or disable a rule file (enabled: false), or
+  # set mode "detect" to log matches without blocking while tuning.
   enabled: true
   rules_dir: "/etc/gated/waf"
   # Folder-based access lists, hot-reloaded. Drop *.ips files (single

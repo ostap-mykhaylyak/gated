@@ -8,11 +8,11 @@
 # The session field is "valid" when the visit cookie is present and
 # valid, "none" otherwise. If a rule uses it, gated automatically
 # issues and checks the visit cookie (see the session section in
-# config.yaml). Disabled by default.
+# config.yaml). ENABLED by default.
 
 group: session
 description: Require a prior visit before sensitive endpoints.
-enabled: false
+enabled: true
 
 rules:
   # WooCommerce add-to-cart called directly, without having loaded a

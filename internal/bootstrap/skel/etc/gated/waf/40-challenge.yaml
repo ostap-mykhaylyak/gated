@@ -6,11 +6,11 @@
 # cookie. Cleared clients pass without further challenges until the
 # cookie expires (challenge.clearance_ttl).
 #
-# Disabled by default: review and enable per your policy.
+# ENABLED by default. Review the country/policy choices below.
 
 group: challenge
 description: Challenge suspicious traffic; block floods and scanners.
-enabled: false
+enabled: true
 
 rules:
   # Send all traffic from a country to the challenge instead of

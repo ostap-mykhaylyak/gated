@@ -800,6 +800,11 @@ func TestRetryOnDeadBackend(t *testing.T) {
 // wafProxy wires a proxy with the WAF enabled globally and one rule
 // file, plus one vhost that inherits the global WAF policy.
 func wafProxy(t *testing.T, backendURL, wafRules string) http.Handler {
+	h, _ := wafProxyM(t, backendURL, wafRules)
+	return h
+}
+
+func wafProxyM(t *testing.T, backendURL, wafRules string) (http.Handler, *metrics.Metrics) {
 	t.Helper()
 
 	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
@@ -830,7 +835,33 @@ func wafProxy(t *testing.T, backendURL, wafRules string) http.Handler {
 	pg, _ := pages.New("")
 	chal := challenge.NewManager("test-secret", 0, time.Minute)
 	sess := session.NewManager("test-session-secret", time.Hour)
-	return New(mgr, store, certs.New(t.TempDir()), wafEngine, nil, chal, sess, pg, cache.New(64<<20, 0), m, logs).Handler(true)
+	return New(mgr, store, certs.New(t.TempDir()), wafEngine, nil, chal, sess, pg, cache.New(64<<20, 0), m, logs).Handler(true), m
+}
+
+func TestWAFBlockCountedOnce(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "reached backend")
+	}))
+	defer backend.Close()
+
+	h, m := wafProxyM(t, backend.URL, `
+rules:
+  - id: "blk"
+    action: block
+    match:
+      - field: path
+        operator: prefix
+        patterns: ["/x"]
+`)
+	req := httptest.NewRequest("GET", "https://app.test/x", nil)
+	req.Host = "app.test"
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	// One blocked request must increment the block metric exactly once
+	// (the engine counts it; the handler must not double-count).
+	if got := m.Snapshot().WAFBlocked; got != 1 {
+		t.Fatalf("WAFBlocked = %d, want 1 (double-count?)", got)
+	}
 }
 
 func TestWAFBlocksThroughProxy(t *testing.T) {

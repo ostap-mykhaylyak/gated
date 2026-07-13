@@ -164,7 +164,8 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 			dec, pending := p.waf.Evaluate(wctx, v.WAFPol)
 			wafPending = pending
 			if dec.Block {
-				p.m.WAFBlock()
+				// The engine already counted this block (Evaluate); do
+				// not double-count it here.
 				action := "block"
 				title := "Request Blocked"
 				message := "This request was blocked by the security rules. If you believe this is an error, contact the site administrator."

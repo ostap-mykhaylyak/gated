@@ -304,7 +304,15 @@ func (p *Proxy) Handler(secure bool) http.Handler {
 		if secure {
 			reqScheme = "https"
 		}
-		for attempt := 0; attempt < len(pool.Backends()); attempt++ {
+		// Retry a failed, replayable request: 1 initial try + configured
+		// retries. With one backend per scheme this re-tries the same
+		// backend (recovers transient blips); with several it fails over.
+		// At least try every backend once.
+		maxAttempts := 1 + cfg.Proxy.Retries
+		if n := len(pool.Backends()); maxAttempts < n {
+			maxAttempts = n
+		}
+		for attempt := 0; attempt < maxAttempts; attempt++ {
 			b := pool.Pick(r, clientIP, reqScheme)
 			if b == nil {
 				failed = true

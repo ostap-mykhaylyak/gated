@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -771,6 +772,33 @@ func TestRedirectToHTTPS(t *testing.T) {
 	}
 	if got := rec.Header().Get("Location"); got != "https://app.test/x?y=1" {
 		t.Fatalf("Location = %q", got)
+	}
+}
+
+func TestRetryRecoversTransientFailure(t *testing.T) {
+	var n int32
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&n, 1) == 1 {
+			// First attempt: drop the connection with no response — a
+			// transient, replayable failure.
+			conn, _, err := http.NewResponseController(w).Hijack()
+			if err == nil {
+				conn.Close()
+			}
+			return
+		}
+		io.WriteString(w, "recovered")
+	}))
+	defer backend.Close()
+
+	// Default config => proxy.retries: 2 (3 attempts total).
+	p := newTestProxy(t, "{}\n", map[string]string{"app.yaml": vhostYAML(backend.URL, "")})
+	req := httptest.NewRequest("GET", "http://app.test/", nil)
+	req.Host = "app.test"
+	rec := httptest.NewRecorder()
+	p.Handler(false).ServeHTTP(rec, req)
+	if rec.Code != 200 || rec.Body.String() != "recovered" {
+		t.Fatalf("retry did not recover a transient backend failure: %d %q", rec.Code, rec.Body.String())
 	}
 }
 

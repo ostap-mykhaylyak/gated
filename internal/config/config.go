@@ -93,6 +93,7 @@ type Proxy struct {
 	RealIPHeader      string   `yaml:"real_ip_header"`
 	ReadHeaderTimeout Duration `yaml:"read_header_timeout"`
 	BackendTimeout    Duration `yaml:"backend_timeout"`
+	Retries           int      `yaml:"retries"` // extra backend attempts for a failed safe request
 }
 
 // Compression is the global default, overridable per-vhost.
@@ -191,6 +192,7 @@ func Default() *Config {
 			RealIPHeader:      "X-Forwarded-For",
 			ReadHeaderTimeout: Duration(10 * time.Second),
 			BackendTimeout:    Duration(60 * time.Second),
+			Retries:           2,
 		},
 		Compression: Compression{
 			Enabled:    true,
@@ -299,6 +301,9 @@ func (c *Config) validate() error {
 	}
 	if c.Proxy.BackendTimeout.Std() <= 0 {
 		return fmt.Errorf("proxy.backend_timeout must be positive")
+	}
+	if c.Proxy.Retries < 0 || c.Proxy.Retries > 10 {
+		return fmt.Errorf("proxy.retries must be between 0 and 10")
 	}
 
 	// Unknown compression algorithms are skipped with a warning.

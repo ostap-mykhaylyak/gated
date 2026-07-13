@@ -67,10 +67,15 @@ cache:
 
 waf:
   # Web application firewall. Rules live in rules_dir, one group per
-  # YAML file (see waf/*.yaml), hot-reloaded. Disabled by default.
-  # mode "detect" logs matches without blocking (use it to tune, then
-  # switch to "block"). Per-vhost overrides available in the vhost file.
-  enabled: false
+  # YAML file (see waf/*.yaml), hot-reloaded. ON by default with the
+  # safe protective core (waf/00-common, 10-injection, 20-fail2ban):
+  # these block attacks (traversal, /.env, sqli, xss) and ban scanners
+  # without touching legitimate traffic. The opinionated rule files
+  # (30-70) ship enabled:false — turn them on per-site after review
+  # (some, e.g. geo/country and User-Agent challenges, affect real
+  # visitors). Use mode "detect" to log matches without blocking while
+  # tuning, then switch back to "block". Per-vhost overrides available.
+  enabled: true
   rules_dir: "/etc/gated/waf"
   # Folder-based access lists, hot-reloaded. Drop *.ips files (single
   # IP or CIDR, one per line) and *.asn files (one ASN per line, needs

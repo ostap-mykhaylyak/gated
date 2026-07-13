@@ -41,3 +41,21 @@ rules:
       threshold: 6
       window: 1m
       ban_time: 30m
+
+  # Path scanner detected by 404s: a client that racks up many 404s in
+  # a minute is enumerating URLs (unlike a real browser, which follows
+  # real links). Ban regardless of path — the response status is the
+  # signal. Safe: legitimate users rarely hit many 404s in a minute.
+  - id: "f2b-404-scanner"
+    msg: "URL scanner (many 404s)"
+    severity: medium
+    action: ban
+    match:
+      - field: path
+        operator: rx
+        patterns: ['.']   # any path; the 404 status is what counts
+    track:
+      threshold: 20
+      window: 1m
+      ban_time: 1h
+      on_status: [404]
